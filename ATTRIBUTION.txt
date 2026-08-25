@@ -1,0 +1,78 @@
+CARE NOTE — ATTRIBUTION
+=======================
+External libraries, models and datasets, with licenses.
+
+Maintenance rule: append here THE MOMENT a dependency is added, in the phase
+that adds it. Do not reconstruct this file from requirements.txt at the end —
+that is how things get missed.
+
+Last updated: Phase 0 (2026-08-25)
+
+
+BACKEND (Python) — see backend/requirements.txt
+-----------------------------------------------
+fastapi            0.141.1   MIT          Web framework / DI container
+uvicorn            0.52.4    BSD-3-Clause ASGI server
+starlette          1.6.0     BSD-3-Clause ASGI toolkit (FastAPI dependency)
+SQLAlchemy         2.0.52    MIT          ORM and query construction
+pydantic           2.13.4    MIT          Request/response validation
+pydantic-settings  2.7.1     MIT          Env-var configuration
+PyJWT              2.7.0     MIT          JWT encode/decode
+python-multipart   0.0.20    Apache-2.0   Form parsing (FastAPI dependency)
+httpx              0.28.1    BSD-3-Clause HTTP client (LLM provider + test client)
+anyio              4.14.2    MIT          Async compatibility (Starlette dependency)
+pytest             9.1.1     MIT          Test runner
+
+Python standard library only, for: hashlib/hmac (PBKDF2 password hashing),
+re (PHI redaction), difflib (version diffs, Phase 2), uuid, dataclasses,
+logging. No cryptography or NLP dependency was added — see DECISIONS.md D-002
+and D-012 for why.
+
+
+FRONTEND (JavaScript) — see frontend/package.json
+--------------------------------------------------
+react                18.3.1   MIT   UI library
+react-dom            18.3.1   MIT   DOM renderer
+vite                 5.4.21   MIT   Dev server / bundler
+@vitejs/plugin-react 4.7.0    MIT   React fast-refresh plugin
+tailwindcss          3.4.19   MIT   Utility CSS
+postcss              8.5.26   MIT   CSS transform pipeline (Tailwind dependency)
+autoprefixer         10.5.4   MIT   Vendor prefixing
+
+Transitive dependencies are resolved by npm and recorded in
+frontend/package-lock.json. The direct dependencies above are all MIT.
+
+
+MODELS
+------
+Phase 0 default: NONE. The LLM wrapper ships with a deterministic offline stub
+provider (`_StubProvider` in backend/app/ai/llm_client.py) so the repository
+runs end to end with no API key and no network access. See DECISIONS.md D-010.
+
+Optional live provider, used only when CARENOTE_LLM_PROVIDER=anthropic:
+  Anthropic Claude (claude-sonnet-4-5) — commercial API, Anthropic Commercial
+  Terms of Service. Not redistributed; accessed over the network at runtime.
+
+If Phase 5 (voice capture) is built, any speech-to-text model added must be
+listed here at the moment it is added.
+
+
+DATA
+----
+All data in this repository is SYNTHETIC and was written by hand for this
+project (backend/init_db.py, and the sample strings inside tests/).
+
+No external dataset is used. No real patient data has been used at any point,
+and no real record was ever accessible to this system.
+
+Patient names, clinic names, MRNs, NRIC-format identifiers, phone numbers and
+dates of birth appearing anywhere in this repository are invented. The
+NRIC-shaped strings in tests (e.g. S1234567D) are pattern-valid but do not
+correspond to real identifiers.
+
+
+PRIOR ART / INSPIRATION (no code or assets used)
+------------------------------------------------
+The candidate brief cites Google Docs (collaborative editing), Notion databases
+(structured extraction), and Slack threads (timeline history) as conceptual
+reference points. No code, design assets, or APIs from any of these were used.
