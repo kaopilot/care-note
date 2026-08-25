@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Local database (synthetic data only, but never commit a DB file)
+*.db
+*.db-journal
+*.sqlite3
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
