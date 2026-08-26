@@ -180,3 +180,87 @@ def test_login_failure_does_not_enumerate_accounts(client) -> None:
     wrong_pw = client.post("/auth/login", json={"username": "staff_a", "password": "bad"})
     assert unknown.status_code == wrong_pw.status_code == 401
     assert unknown.json()["detail"] == wrong_pw.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# Token transport: httpOnly cookie (browser) and bearer header (clients)
+# --------------------------------------------------------------------------
+
+
+def test_login_sets_httponly_cookie(client) -> None:
+    """The browser's copy of the token must be unreadable by JavaScript, so a
+    stored-XSS bug cannot become durable account takeover (D-016)."""
+    response = client.post("/auth/login", json={"username": "staff_a", "password": "pw"})
+    assert response.status_code == 200
+
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "carenote_access=" in set_cookie
+    assert "httponly" in set_cookie.lower()
+    assert "samesite=lax" in set_cookie.lower()
+
+
+def test_cookie_alone_authenticates(client) -> None:
+    """A browser sends no Authorization header — the cookie must be sufficient."""
+    client.post("/auth/login", json={"username": "clinician_a", "password": "pw"})
+    response = client.get("/demo/whoami")  # no explicit header
+    assert response.status_code == 200
+    assert response.json()["role"] == "clinician"
+
+
+def test_cookie_session_is_still_clinic_scoped(client) -> None:
+    """Changing the token transport must not change the authorisation result."""
+    client.post("/auth/login", json={"username": "clinician_a", "password": "pw"})
+    body = client.get("/demo/patients").json()
+    assert body["patient_ids"] == ["patient-a1"]
+
+
+def test_logout_clears_the_cookie(client) -> None:
+    client.post("/auth/login", json={"username": "staff_a", "password": "pw"})
+    assert client.get("/demo/whoami").status_code == 200
+
+    client.post("/auth/logout")
+    assert client.get("/demo/whoami").status_code == 401
+
+
+def test_header_takes_precedence_over_cookie(client, token_for) -> None:
+    """Explicit authority beats ambient. A cross-origin attacker cannot set a
+    header, so this ordering never weakens the SameSite CSRF posture."""
+    client.post("/auth/login", json={"username": "staff_a", "password": "pw"})
+    headers = token_for("u-a-clinician", Role.CLINICIAN, "clinic-a")
+    response = client.get("/demo/whoami", headers=headers)
+    assert response.json()["role"] == "clinician"  # header identity, not cookie's
+
+
+def test_token_carries_a_bounded_lifetime(client) -> None:
+    """No refresh flow exists, so the TTL is the entire session budget (D-016)."""
+    import jwt
+
+    from app.core.config import settings
+
+    body = client.post("/auth/login", json={"username": "staff_a", "password": "pw"}).json()
+    claims = jwt.decode(body["access_token"], settings.jwt_secret, algorithms=["HS256"])
+    assert "exp" in claims and "iat" in claims
+    assert body["expires_in_minutes"] == settings.jwt_ttl_minutes
+    assert settings.jwt_ttl_minutes <= 120, "session TTL should stay short absent a refresh flow"
+
+
+def test_expired_token_is_rejected(client) -> None:
+    import jwt
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.config import settings
+
+    expired = jwt.encode(
+        {
+            "sub": "u-a-staff",
+            "role": "staff",
+            "clinic_id": "clinic-a",
+            "iat": datetime.now(timezone.utc) - timedelta(hours=3),
+            "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+    response = client.get("/demo/whoami", headers={"Authorization": f"Bearer {expired}"})
+    assert response.status_code == 401
+    assert "expired" in response.json()["detail"].lower()

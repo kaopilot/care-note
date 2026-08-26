@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.audit_logging import log_event
+from app.core.config import settings
 from app.core.db import get_db
 from app.models import User
 from app.security.auth import create_access_token, verify_password
@@ -25,10 +26,11 @@ class LoginResponse(BaseModel):
     role: str
     clinic_id: str
     user_id: str
+    expires_in_minutes: int
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
     user = db.query(User).filter(User.username == payload.username).first()
 
     # Same response for unknown user and wrong password — no account enumeration.
@@ -44,6 +46,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
         clinic_id=user.clinic_id,
         patient_id=user.patient_id,
     )
+
+    # The browser's copy: httpOnly so no injected script can read it, SameSite
+    # so it does not ride along on cross-site requests. See DECISIONS.md D-016.
+    response.set_cookie(
+        key=settings.cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+        max_age=settings.jwt_ttl_minutes * 60,
+        path="/",
+    )
+
     log_event(
         actor_id=user.id,
         action="auth.login",
@@ -52,9 +67,26 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
         clinic_id=user.clinic_id,
         metadata={"role": str(user.role)},
     )
+    # `access_token` in the body is for non-browser clients (tests, curl, API
+    # consumers). The browser client must use the cookie and must not persist
+    # this value — see DECISIONS.md D-016 for why that sharp edge is accepted.
     return LoginResponse(
         access_token=token,
         role=str(user.role),
         clinic_id=user.clinic_id,
         user_id=user.id,
+        expires_in_minutes=settings.jwt_ttl_minutes,
     )
+
+
+@router.post("/logout")
+def logout(response: Response) -> dict:
+    """Clear the session cookie.
+
+    Tokens are stateless and not revocable server-side (no denylist — see
+    DECISIONS.md D-016), so this ends the browser session but a token already
+    copied elsewhere stays valid until it expires. Stated rather than implied.
+    """
+    response.delete_cookie(key=settings.cookie_name, path="/")
+    log_event(actor_id=None, action="auth.logout", target_type="session")
+    return {"ok": True}

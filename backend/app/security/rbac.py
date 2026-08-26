@@ -32,6 +32,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import get_db
 from app.core.enums import EntryType, Role
 from app.security import policy
@@ -124,16 +125,36 @@ class AccessScope:
         return f"AccessScope(user={self.user_id}, role={self.role}, clinic={self.clinic_id})"
 
 
-def _bearer_token(request: Request) -> str:
+def _extract_token(request: Request) -> str:
+    """Read the access token, header first, then httpOnly cookie.
+
+    Two accepted transports, for two different callers:
+
+    * `Authorization: Bearer <token>` — tests, curl, and non-browser API
+      clients. Explicit, never ambient.
+    * `carenote_access` httpOnly cookie — the browser. Chosen over
+      localStorage because localStorage is readable by any injected script, so
+      a single stored-XSS bug would become durable account takeover. An
+      httpOnly cookie cannot be read by JavaScript at all (DECISIONS.md D-016).
+
+    Header wins when both are present: explicit authority beats ambient. A
+    cross-origin attacker cannot set a header, so this ordering never weakens
+    the CSRF posture that `SameSite=lax` provides.
+    """
     header = request.headers.get("Authorization", "")
     scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return token
+    if scheme.lower() == "bearer" and token:
+        return token
+
+    cookie_token = request.cookies.get(settings.cookie_name)
+    if cookie_token:
+        return cookie_token
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Missing bearer token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def require_access(*allowed_roles: Role):
@@ -151,7 +172,7 @@ def require_access(*allowed_roles: Role):
     allowed: Sequence[Role] = allowed_roles or tuple(Role)
 
     def dependency(request: Request, db: Session = Depends(get_db)) -> AccessScope:
-        token = _bearer_token(request)
+        token = _extract_token(request)
         try:
             claims: dict[str, Any] = decode_access_token(token)
         except jwt.ExpiredSignatureError:
