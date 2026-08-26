@@ -183,7 +183,27 @@ mentions, revision history UI, self-learning importance, data decay
 implementation, and voice capture. The `/demo/*` routes exist only to exercise
 the RBAC pattern and are replaced by real routes in Phase 1.
 
-Not implemented locally, by decision rather than oversight: TLS and encryption
-at rest — both are deployment configuration for this prototype. See
-`ARCHITECTURE.md` § "Transport and storage security" for the full posture and
-its gaps.
+---
+
+## Security posture at a glance
+
+> **This build is not safe for real PHI as-is.** It is a prototype on synthetic
+> data. The gaps below are disclosed deliberately, not discovered later.
+
+| Area | Status |
+|---|---|
+| PHI redaction chokepoint | Implemented — regex + gazetteer, fail-closed. Not production-grade |
+| Stored-XSS / content safety | Implemented — untrusted content never rendered as HTML, enforced by source scan |
+| RBAC (role + clinic, server-side) | Implemented — proven over HTTP |
+| Logging hygiene | Implemented — content-free by construction |
+| JWT storage | Implemented — httpOnly cookie, `SameSite=lax`, 60-minute TTL |
+| CSRF defence | Documented decision — `SameSite=lax` only |
+| Token refresh / rotation / revocation | **Known gap** |
+| Login rate limiting | **Known gap** |
+| TLS in transit | Documented decision — terminates at the proxy in production |
+| Encryption at rest | Documented decision — managed-Postgres encryption in production |
+
+Full reasoning, including why content is deliberately **not** HTML-escaped
+before storage (clinical text contains `BP <120/80` and `dose <5mg`, and
+silently corrupting a dose is a worse bug than the XSS it would prevent), is in
+`ARCHITECTURE.md` § "Security posture" and `DECISIONS.md` D-015 to D-018.

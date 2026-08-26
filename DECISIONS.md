@@ -179,3 +179,96 @@ a code-review rule.
   decide whether to re-anchor, orphan, or invalidate. Leaning toward marking the
   highlight stale and surfacing that, since silently re-anchoring a highlight
   onto text nobody confirmed would be a trust violation.
+
+---
+
+## Phase 0 addendum — security posture review (2026-08-25)
+
+Added after review flagged two areas the original Phase 0 left silent. Both were
+genuine omissions in the phase plan, not just in the write-up.
+
+### D-015 · Stored XSS: never render untrusted content as HTML; do NOT sanitize on write
+
+This is a rich-text, multi-author, long-lived note system whose content crosses
+privilege boundaries — a staff note surfaces in a clinician's Glance View. Stored
+XSS is the natural vulnerability class and no phase doc mentioned it.
+
+Controls, strongest first:
+1. Untrusted content is never rendered as HTML. React escapes text children, so
+   a stored `<script>` is inert. A source scan fails the build if
+   `dangerouslySetInnerHTML` / `innerHTML =` appears, and a second test fails if
+   a Markdown renderer is added without review.
+2. `sanitize_for_storage()` strips control characters, NFC-normalises, caps length.
+3. `find_injection_markers()` flags suspicious payloads as metadata.
+
+**The deviation:** we deliberately do *not* HTML-escape or tag-strip on write,
+contrary to the usual advice. Clinical prose legitimately contains angle
+brackets — `BP <120/80`, `dose <5mg`, `sats <92% on RA`. Escaping on write
+stores `BP &lt;120/80`, which React escapes again on render, showing a literal
+`&lt;`. Tag-stripping is worse: `<5mg` can be consumed entirely, silently
+turning a dose limit into `mg`.
+
+Silently altering the text of a clinical note is a patient-safety bug, and a
+worse one than the XSS it would defend against — control #1 already neutralises
+the XSS, whereas nothing catches a corrupted dose. Escaping belongs at the
+render boundary, and `escape_html()` is provided for surfaces that genuinely
+emit HTML (PDF export, emailed summaries).
+
+**Cost:** protection is at the render boundary and the frontend scan, not the
+database. A future non-React API consumer that renders content as HTML without
+calling `escape_html()` would be vulnerable.
+
+**Constraint on Phase 2:** any Markdown renderer must be configured with raw
+HTML disabled (`html: false`). A test enforces that this decision is revisited
+rather than drifted past.
+
+### D-016 · JWT: httpOnly cookie, 60-minute TTL, no refresh flow
+
+Previously "JWT with a role claim" and a silent 12-hour default — underspecified
+on expiry, refresh, and client-side storage.
+
+- **Storage: httpOnly cookie** (`HttpOnly; SameSite=lax; Path=/; Max-Age=3600`,
+  plus `Secure` in production). localStorage was rejected: it is readable by any
+  injected script, so one stored-XSS bug becomes durable account takeover. This
+  composes directly with D-015 — the two controls defend the same attack chain
+  at different links. The Vite `/api` proxy makes the frontend same-origin with
+  the backend, so cookie auth works without `SameSite=None` contortions.
+- **Bearer header still accepted** for tests, curl and non-browser clients.
+  Header wins over cookie when both are present: explicit authority beats
+  ambient, and an attacker cannot set headers cross-origin.
+- **TTL: 60 minutes.** Bounded stolen-token lifetime; survives a consult. A test
+  fails if this is raised above 120 minutes while no refresh flow exists.
+- **No refresh, no rotation, no revocation denylist.** `/auth/logout` clears the
+  browser cookie, but a token copied elsewhere stays valid until expiry.
+
+**Honest sharp edge:** login also returns the token in the response body for
+non-browser clients. A careless frontend could persist it to localStorage and
+undo the whole benefit. Accepted for prototype ergonomics, documented rather
+than hidden.
+
+**Cost / known gaps:** no refresh means expiry forces re-login; no denylist
+means no immediate revocation; no login rate limiting (mitigated only in that
+login responses are identical for unknown-user and wrong-password, so accounts
+cannot be enumerated).
+
+### D-017 · CSRF: SameSite=lax only
+
+Introducing cookie auth introduces CSRF exposure that bearer-header-only auth
+did not have. `SameSite=lax` stops cookies riding along on cross-site
+state-changing requests in modern browsers, which is proportionate for a
+prototype with no cross-origin surface.
+
+**Cost:** no defence-in-depth. Production should add a double-submit token, or
+require the bearer header for mutations so ambient cookie authority alone cannot
+perform a write.
+
+### D-018 · No sanitization library added
+
+`bleach`/`nh3` would be the reflex choice. Not added, because under D-015 there
+is nothing for them to do: we are not producing sanitized HTML, we are declining
+to produce HTML at all. Adding an HTML sanitizer would imply the content is
+rendered as HTML somewhere, which is precisely the belief we do not want a
+future contributor to form.
+
+**Cost:** if a later phase does need real rich text (formatting, tables), this
+decision reverses and a sanitizer becomes mandatory at that moment.

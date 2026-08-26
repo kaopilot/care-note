@@ -210,21 +210,175 @@ distribution over repeated warm requests, not a single sample or an assertion.
 
 ---
 
-## Transport and storage security
+## Security posture
 
-Honest statement of what is and is not in place, as the shared context requires:
+Three statuses are used throughout, and they mean different things:
 
-| Requirement | Status |
+- **Implemented** — built, tested, and verifiable in this repo.
+- **Documented decision** — a deliberate choice for a 72-hour prototype, with
+  the production shape stated. Not an oversight.
+- **Known gap** — genuinely missing. Listed because a control whose edges nobody
+  knows is worse than a weaker one everybody understands.
+
+### Summary
+
+| Area | Status |
 |---|---|
-| TLS in transit | **Not implemented locally.** Dev runs plain HTTP on localhost. In production TLS would terminate at the reverse proxy / platform load balancer (nginx, Fly, Render) with HSTS; the app would be bound to localhost behind it. |
-| Encryption at rest | **Not implemented locally.** The dev SQLite file is unencrypted and gitignored. Production would use a managed Postgres with volume-level encryption (AWS RDS/GCP Cloud SQL default), or SQLCipher for a single-node deployment. |
-| Secrets | Read from environment; `.env` gitignored, `.env.example` committed with placeholder values. The default JWT secret is a visible dev-only string that must be overridden. |
-| Password storage | PBKDF2-HMAC-SHA256, 120k rounds, per-user salt. Production would use argon2id. |
-| Data | 100% synthetic. Never connected to a real record. |
+| PHI redaction chokepoint | **Implemented** — regex + gazetteer, fail-closed. Not production-grade; see gaps below |
+| Stored-XSS / content safety | **Implemented** — untrusted content never rendered as HTML, enforced by source scan |
+| RBAC enforcement | **Implemented** — role + clinic fused, server-side, proven over HTTP |
+| Logging hygiene | **Implemented** — content-free by construction, verified by grep and test |
+| JWT storage (httpOnly cookie) | **Implemented** — `HttpOnly; SameSite=lax; Max-Age=3600` |
+| CSRF defence | **Documented decision** — `SameSite=lax` only; no token-based defence |
+| Token refresh / rotation / revocation | **Known gap** — no refresh flow, no denylist |
+| Login rate limiting | **Known gap** |
+| TLS in transit | **Documented decision** — terminates at the proxy in production |
+| Encryption at rest | **Documented decision** — managed-Postgres volume encryption in production |
+| Password hashing | **Documented decision** — PBKDF2 120k rounds; argon2id in production |
 
-The honest gap: this is a 72-hour prototype and the crypto posture is
-deployment configuration, not application code. Claiming otherwise would be the
-kind of unearned assurance this product is specifically supposed to avoid.
+**The current build is not safe for real PHI as-is.** This is stated in the
+README as well as here, deliberately, so it cannot be missed by a reader who
+only opens one file.
+
+### PHI redaction — implemented
+
+Single chokepoint `redact_phi()` in `backend/app/ai/redaction.py`, called
+unconditionally by `complete()` in `backend/app/ai/llm_client.py`, which is the
+only module in the codebase that reaches a model. Enforced structurally, not by
+convention: three tests scan the source tree and fail if any other module
+imports an LLM SDK or references an LLM endpoint, or if the redaction call is
+removed. After redacting, the payload is re-scanned and the call raises
+`PHILeakError` rather than sending if PHI survived.
+
+**Known gap:** regex redaction is not adequate for real PHI. Bare lowercase
+names in prose, transliterated names outside the gazetteer, addresses, and
+quasi-identifier combinations (rare condition + precise date) are all missed.
+Production needs a clinical NER pass or a vendor de-identification service in
+front of this chokepoint — which fits behind the same `redact_phi` signature,
+so no downstream code would change. Full detail in the section above.
+
+### Stored XSS / content safety — implemented
+
+This is a rich-text, multi-author, long-lived note system where content crosses
+privilege boundaries (a staff note surfaces in a clinician's Glance View), so
+stored XSS is the natural vulnerability class. Controls, strongest first:
+
+1. **Untrusted content is never rendered as HTML.** Note and comment bodies are
+   plain text; React escapes text children by default, so a stored `<script>` is
+   inert. `test_frontend_never_renders_raw_html` scans the frontend and fails
+   the build if `dangerouslySetInnerHTML`, `innerHTML =`, or `outerHTML =`
+   appears — the same source-scanning technique that keeps the LLM chokepoint
+   honest. A second test fails if a Markdown renderer is added without review,
+   since Markdown with HTML passthrough re-opens exactly this hole.
+2. **Write-time normalisation** — `sanitize_for_storage()` strips NUL and
+   control characters, NFC-normalises Unicode, normalises line endings, and caps
+   length at 50k characters.
+3. **Write-time detection** — `find_injection_markers()` records that a payload
+   *looked like* an injection attempt, as metadata, without altering the text.
+
+**We deliberately do not escape or strip HTML on write**, which departs from the
+usual "sanitize before storage" advice. The reason is clinical, not technical:
+clinical prose legitimately contains angle brackets (`BP <120/80`, `dose <5mg`,
+`sats <92% on RA`). Escaping on write stores `BP &lt;120/80`, which React then
+escapes *again* on render, showing the clinician a literal `&lt;`. Tag-stripping
+is worse — `<5mg` can be eaten entirely, silently turning a dose limit into
+`mg`. Silently altering the text of a clinical note is a patient-safety bug, and
+a worse one than the XSS it would defend against, because control #1 has already
+neutralised the XSS whereas nothing catches a corrupted dose. So content is
+stored verbatim and escaping lives at the render boundary.
+
+`escape_html()` exists for surfaces that genuinely emit HTML — PDF export, an
+emailed patient summary, any server-rendered page. Those must call it; React
+surfaces must not.
+
+**Known gap:** enforcement is at the render boundary and the frontend scan, not
+at the database. A future non-React consumer of the API that renders content as
+HTML without calling `escape_html()` would be vulnerable. The scan covers this
+repo's frontend only.
+
+### Authentication and session handling
+
+**Implemented.** JWT (HS256) with `sub`, `role`, `clinic_id`, `iat` and `exp`
+claims, issued at login. Seeded users only, no signup or SSO — the brief grades
+authorisation, not authentication (D-002).
+
+**Token storage — implemented as httpOnly cookie.** On login the token is set as
+`carenote_access` with `HttpOnly; SameSite=lax; Path=/; Max-Age=3600`, plus
+`Secure` when `CARENOTE_COOKIE_SECURE=true` (off for localhost, required in
+production). localStorage was rejected: it is readable by any injected script,
+so a single stored-XSS bug would escalate into durable account takeover. This
+choice composes directly with the XSS controls above (D-016).
+
+The API also accepts `Authorization: Bearer` for tests, curl and non-browser
+clients. The header wins when both are present — explicit authority beats
+ambient, and a cross-origin attacker cannot set a header, so the ordering does
+not weaken the CSRF posture.
+
+**Sharp edge, stated:** login also returns the token in the response body, for
+non-browser clients. The browser client must use the cookie and must not persist
+that value. This is a convenience that a careless frontend could undo.
+
+**Token expiry — implemented.** 60 minutes (`CARENOTE_JWT_TTL_MINUTES`). Short
+enough to bound a stolen token, long enough to survive a consult. A test fails
+if the TTL is raised above 120 minutes while no refresh flow exists.
+
+**CSRF — documented decision.** `SameSite=lax` is the only defence. It stops
+cookies riding along on cross-site state-changing requests in modern browsers,
+which is proportionate for a prototype with no cross-origin surface. Production
+should add a double-submit token or require the bearer header for mutations.
+
+**Known gaps:** no refresh flow, so the TTL is the whole session budget and
+expiry means re-login. Tokens are stateless with no denylist, so `/auth/logout`
+clears the browser cookie but a token copied elsewhere stays valid until it
+expires. No rate limiting on login — acceptable for seeded prototype accounts,
+not for production; note the login handler already returns identical responses
+for unknown-user and wrong-password, so accounts cannot be enumerated.
+
+### RBAC enforcement — implemented
+
+Server-side, on role and clinic together, via a single non-separable dependency
+(`require_access` in `backend/app/security/rbac.py`, rules in `policy.py`). The
+common real-world RBAC bug is a route that checks role but forgets clinic scope;
+here that is not expressible, because the only database handle a route receives
+is an `AccessScope` that has already narrowed. Full mechanism above.
+
+Proven by direct API calls in `tests/test_rbac_pattern.py` and a live HTTP
+transcript in `docs/PHASE0_VERIFICATION.md` — not by UI-level hiding, which is
+assumed compromised. Phase 3's `test_rbac_scope.py` repeats this against the
+real product routes.
+
+### Transport and storage encryption — documented decision
+
+| | Local dev | Production posture |
+|---|---|---|
+| TLS | Not implemented; plain HTTP on localhost | Terminates at the reverse proxy / platform load balancer (nginx, Fly, Render, ALB) with HSTS; app bound to localhost behind it. Not hand-rolled in application code |
+| At rest | SQLite, unencrypted, gitignored | Managed Postgres with volume-level encryption (RDS / Cloud SQL / Supabase default), or SQLCipher for single-node |
+| Secrets | Env vars; `.env` gitignored, `.env.example` committed with placeholders | Platform secret manager. The default JWT secret is a visibly fake dev string that must be overridden |
+| Passwords | PBKDF2-HMAC-SHA256, 120k rounds, per-user salt | argon2id |
+
+This is deployment configuration rather than application code, which is why it
+is a decision rather than a gap — but it does mean the build is not safe for
+real PHI as-is.
+
+### Logging hygiene — implemented
+
+`log_event()` in `backend/app/core/audit_logging.py` accepts a fixed set of
+scalar fields. There is deliberately no `message` or `content` parameter to
+reach for, and any metadata value over 64 characters or under a key like
+`content`/`body`/`transcript` is replaced with a length marker before emitting.
+Logs carry actor ID, action, target type/ID, clinic ID and timestamp only.
+
+One careless log line defeats the redaction effort as completely as skipping
+`redact_phi()`, so it gets the same treatment: the careless call is made
+inexpressible rather than discouraged. Verified by
+`test_no_prompt_content_in_logs` and by grepping a live server's log for seeded
+patient names and MRNs after exercising every route — clean, including an MRN
+that was returned in a response body (`docs/PHASE0_VERIFICATION.md` §2).
+
+### Data handling
+
+All data is synthetic and hand-written for this project. The system has never
+been connected to a real medical record.
 
 ---
 

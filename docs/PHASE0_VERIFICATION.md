@@ -105,17 +105,46 @@ logged.
 
 ---
 
-## 3. Test suite
+## 3. Session cookie
+
+Browser sessions carry the token in an httpOnly cookie so an injected script
+cannot read it (DECISIONS.md D-016). Response header on login:
+
+```
+set-cookie: carenote_access=eyJhbGci...; HttpOnly; Max-Age=3600; Path=/; SameSite=lax
+```
+
+`HttpOnly` (unreadable from JavaScript), `SameSite=lax` (not sent on cross-site
+state-changing requests), `Max-Age=3600` (60-minute bound, no refresh flow).
+`Secure` is added when `CARENOTE_COOKIE_SECURE=true`; it is off for localhost
+because a Secure cookie is not sent over plain HTTP.
+
+Authorisation is identical across both token transports — a cookie-only session
+is still clinic-scoped:
+
+```
+$ curl -b jar.txt localhost:8099/demo/patients/patient-b1     # cookie, no header
+  -> HTTP 404   {"detail":"Patient not found"}
+
+$ curl -X POST -b jar.txt -c jar.txt localhost:8099/auth/logout
+$ curl -b jar.txt localhost:8099/demo/whoami
+  -> HTTP 401
+```
+
+---
+
+## 4. Test suite
 
 ```
 $ pytest tests/ -q
-63 passed in 1.52s
+96 passed in 2.28s
 ```
 
 | File | Covers |
 |---|---|
-| `tests/test_rbac_pattern.py` | Role and clinic enforcement, server-side, via HTTP |
+| `tests/test_rbac_pattern.py` | Role and clinic enforcement, server-side, via HTTP; cookie and bearer transports; token expiry |
 | `tests/test_redaction.py` | PHI detection, consistency, idempotence, and stated gaps |
+| `tests/test_sanitization.py` | Stored-XSS controls; clinical angle brackets survive verbatim |
 | `tests/test_llm_chokepoint.py` | That the redaction boundary cannot be bypassed |
 | `tests/test_provenance.py` | Pointer grammar, resolution, cross-clinic refusal |
 

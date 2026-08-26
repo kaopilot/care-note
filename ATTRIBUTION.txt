@@ -24,9 +24,17 @@ anyio              4.14.2    MIT          Async compatibility (Starlette depende
 pytest             9.1.1     MIT          Test runner
 
 Python standard library only, for: hashlib/hmac (PBKDF2 password hashing),
-re (PHI redaction), difflib (version diffs, Phase 2), uuid, dataclasses,
-logging. No cryptography or NLP dependency was added — see DECISIONS.md D-002
-and D-012 for why.
+re (PHI redaction), html + unicodedata (content sanitization), difflib (version
+diffs, Phase 2), uuid, dataclasses, logging.
+
+Three dependencies were deliberately NOT added:
+  - a cryptography/argon2 library  (DECISIONS.md D-002)
+  - an NLP/NER library for redaction  (DECISIONS.md D-012)
+  - an HTML sanitizer such as bleach or nh3  (DECISIONS.md D-018) — under D-015
+    there is nothing for it to do, because the system declines to render
+    untrusted content as HTML at all rather than sanitizing HTML it produces.
+    Adding one would imply content IS rendered as HTML somewhere, which is
+    precisely the belief a future contributor should not form.
 
 
 FRONTEND (JavaScript) — see frontend/package.json
