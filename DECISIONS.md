@@ -450,3 +450,132 @@ test against a seed too thin to distinguish four roles.
   arguably should not read clinical reasoning by default. Left as is because the
   brief's wording is explicit; flagged because it is the most privileged read
   path in the system.
+
+---
+
+## Phase 2 — Core product surface (2026-08-26)
+
+### D-029 · Importance scoring is a weighted sum over named features, not a model
+The Glance View ranks with `W_RECENCY·recency + W_RISK·risk + W_ENTITY·entities
++ W_ACTION·unresolved + W_LEARNED·learned`, over tags produced by keyword and
+pattern matching in `services/features.py`.
+
+A clinical NER model would have better recall on prose we did not anticipate.
+It would also be unexplainable, and this product's entire thesis is that a
+clinician can see *why* something was surfaced before deciding whether to trust
+it. Every `risk_reason` shown on the card is generated from the same table that
+produced the tag, and the per-term score breakdown is stored on the highlight
+and rendered in the UI. A ranker nobody can audit would undercut the product it
+was serving.
+
+Known cost: a medication absent from the watchlist scores as ordinary prose.
+That is a recall gap, not a safety gap — an unrecognised term is simply not
+promoted, and the entry still sits in the timeline. The failure mode is "less
+helpful", never "silently hid something".
+
+### D-030 · Highlights anchor to a version and go stale; they never re-anchor
+Phase 1 left this open. Resolved: a `Highlight` stores
+`source_version_number`, and staleness is `highlight.source_version_number !=
+entry.version_number`. Stale highlights resolve their span text against the
+*version snapshot they were made against*, and the UI marks them "source edited
+since".
+
+The alternative — silently moving the span onto the current text — would show a
+clinician's confirmed highlight sitting over words nobody approved. Invalidating
+outright was rejected too: the fact that a clinician thought something mattered
+survives the sentence being reworded.
+
+### D-031 · Offline summarisation is real extractive summarisation, and says so
+With no API key the stub provider returns non-JSON, and `_extractive_summary`
+takes over: it selects the highest-signal utterances from the already-redacted
+transcript using the same feature vocabulary the Glance View scores on.
+
+The lazy option was to store the stub's `[STUB SUMMARY 4f3a2b1c]` output. A
+reviewer with no key would then see placeholder text where a consult summary
+should be and could not judge the product at all. `model_used` records which
+path ran (`offline-extractive-v1` vs `provider:model`), so provenance never
+overstates itself — the note does not claim a model wrote it when one did not.
+
+Confidence is *derived* on that path, from hedging density in the source
+transcript, rather than asserted. A session where the patient said "maybe", "I
+think" and "not sure" throughout produces a summary the UI marks lower — which
+is the calibration signal the brief asks for, and it demonstrably varies
+(patient session ≈0.47 vs nurse consult ≈0.77 on the seeded transcripts).
+
+### D-032 · The scribe pipeline is synchronous; the processing state is client-rendered
+A background worker needs its own session, failure surface and retry story, none
+of which the demo exercises. The pipeline runs inside the request, and the
+client shows a shaped placeholder card for its duration.
+`CARENOTE_SCRIBE_DELAY_MS` (default 0, including in tests) makes that state
+observable when recording the demo.
+
+Honest limit: a crash mid-pipeline loses the summary rather than leaving a
+retryable job. Acceptable when the input is a fixture; not acceptable once the
+input is a recording someone cannot reproduce, which is a Phase 5 concern.
+
+### D-033 · "What's new" compares against a held marker, not the last page load
+`PatientView` stores two timestamps. `last_viewed_at` moves on every load;
+`previous_viewed_at` is the comparison point and only rolls forward when more
+than `VIEW_SESSION_GAP` (20 minutes) has passed.
+
+With one timestamp, opening the Glance View would clear the very thing it just
+showed you — a refresh, or a second monitor, and the news is gone. First visit
+returns no marker at all rather than captioning an entire chart as new.
+
+### D-034 · Redaction placeholder collision fixed (defect found in Phase 2)
+`nric` and `mrn` are separate categories sharing the `[ID_{n}]` template, and
+counters were keyed per category — so the first NRIC and the first MRN in a
+document both rendered as `[ID_1]`. A model reading `MRN-[ID_1], NRIC [ID_1]`
+would read one identifier where there were two. Counters are now keyed on the
+token template. Found by running a real transcript through the scribe pipeline;
+worth recording because it is exactly the class of bug that unit tests over
+single-identifier strings do not catch.
+
+### D-035 · Comments are staff/clinician/admin only; patients are not participants
+The brief says a patient cannot *view* internal comments. This build also
+refuses patient *writes*, and enforces the read rule twice: refused at the
+route, and every internal role's comment is stamped `is_internal=True` at
+creation, so a later route that forgets the check still cannot leak one.
+
+A patient's voice reaches the record through `patient_note` entries and AI
+session summaries, which are first-class timeline content. Letting them write
+into a thread they cannot read the rest of would be worse than not offering it.
+
+### D-036 · Typography carries provenance
+Human-authored content is set in the UI sans; machine-generated summaries and
+transcript text in mono. Alongside the dashed rail, the rail colour and the
+explicit "AI scribed" label, that is four independent signals for one
+distinction.
+
+The brief makes AI-vs-human distinction a hard requirement, and one signal is
+not enough for it: colour alone fails a colour-blind reader on the exact
+distinction the trust argument rests on. System font stacks rather than
+webfonts — the build must run offline for a reviewer with no network, and every
+dependency has to earn its line in `ATTRIBUTION.txt`.
+
+### Deferred / cut in Phase 2
+* **Real-time multi-user sync.** No WebSocket, no live cursors. Optimistic
+  locking plus a 409 that carries the current state covers the collision case
+  the brief actually names; presence would be demo polish paid for in
+  infrastructure.
+* **Timeline pagination.** Still deferred, now with a measured reason: the
+  Glance View P95 is ~11ms at seed depth, so the pressure is not there yet. It
+  will be at a few hundred entries per patient.
+* **Highlight generation for staff-authored content viewed by staff.** Works,
+  but staff cannot accept/reject, so suggestions are advisory to them. Flagged
+  because the learning loop therefore only hears from clinicians.
+* **Editing a comment.** Resolve/unresolve and reply exist; editing a posted
+  comment does not. Version history on comments would be a second, near-
+  duplicate implementation of `Version` for much less value.
+
+### Open questions carried into Phase 3
+* `patient_summary` is still clinician-writable only. Now that the scribe
+  pipeline exists, AI-drafted-plus-clinician-approval fits the trust thesis
+  better and is a small change — deliberately not made mid-phase.
+* `list_entries` still returns full content for every entry. The Glance View
+  now exists, so the split (summaries in the list, bodies on demand) is finally
+  well-defined. Deferred: it changes a response shape three components read.
+* The learned scoring term reads `FeatureWeight` and returns 0.0 because
+  nothing writes to that table yet. `InteractionLog` rows *are* being written
+  from Phase 2 onward, so Phase 4 starts with real behavioural history rather
+  than an empty table.

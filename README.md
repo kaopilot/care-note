@@ -9,9 +9,11 @@ and server-enforced RBAC.
 > **Synthetic data only.** This is a prototype. It has never been connected to a
 > real medical record and must not be.
 
-**Build status: Phase 0 complete.** Architecture, schema, and both safety
-boundaries (RBAC, PHI redaction) are built and tested. Product features begin in
-Phase 1 — see [Current status](#current-status) for the honest list.
+**Build status: Phase 2 complete.** The product surface is built: longitudinal
+timeline, AI scribe pipeline, Glance View with provenance click-through,
+threaded collaboration, revision history with revert, and conflict handling.
+See [Current status](#current-status) for the honest list of what is and is not
+finished.
 
 ---
 
@@ -63,10 +65,10 @@ difference is decided server-side:
 
 | Role | Entries visible | Not visible |
 |---|---|---|
-| clinician | 5 | — |
-| admin | 5 | — (oversight: reads all, authors nothing) |
-| staff | 4 | `clinician_section` (documented assumption D-004) |
-| patient | 2 | staff notes, clinician sections, raw AI notes |
+| clinician | all | — |
+| admin | all | — (oversight: reads all, authors nothing) |
+| staff | fewer | `clinician_section` (documented assumption D-004) |
+| patient | fewest | staff notes, clinician sections, raw AI notes, all comments |
 
 The UI is not doing this filtering. `GET /patients/patient-a1/entries` returns
 different rows depending on the token, and asking for a hidden entry by id
@@ -77,25 +79,34 @@ directly still fails — which is what `scripts/phase1_smoke.py` demonstrates.
 With the backend running:
 
 ```bash
-python scripts/phase1_smoke.py
+python scripts/phase1_smoke.py     # 29 checks — access control, over real HTTP
+python scripts/phase2_smoke.py     # 35 checks — the whole product surface
+python scripts/bench_glance.py     # Glance View latency, measured not asserted
 ```
 
-29 checks over real HTTP: all eight logins, the four scoped views, one entry
-written through the API, then cross-role and cross-clinic attacks straight at
-the endpoints. Exits non-zero if any check fails.
+`phase1_smoke.py` needs the server running; the other two are self-contained.
+
+`phase2_smoke.py` walks every Phase 2 surface in the order the demo scenarios
+use them: all three scribe interaction types through redaction, the role-scoped
+timeline, the Glance View, a provenance pointer resolved and then refused across
+clinics, accept/reject, a manual highlight inside an AI note, a mention and a
+task, an edit followed by a stale write refused with 409, a diff, a revert, and
+a clinician correction that flags an AI note without deleting it. Exits non-zero
+if any check fails.
 
 ---
 
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 146 tests
+pytest tests/ -v                  # from the repository root — 173 tests
 pytest tests/ -v -k rbac          # the Phase 0 enforcement-pattern tests
-pytest tests/ -v -k phase1        # the walking-skeleton proofs (50 tests)
+pytest tests/ -v -k phase1        # the walking-skeleton proofs
+pytest tests/ -v -k phase2        # the Phase 2 product-surface tests
 pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 ```
 
-146 tests, all passing, no API key or network required.
+173 tests, all passing, no API key or network required.
 
 The two Phase 1 access-control suites were **mutation-checked** — deliberately
 broken to confirm they can fail. Reversing D-004 in `policy.py` fails exactly
@@ -112,11 +123,48 @@ that cannot fail is worse than no test, because it gets mistaken for coverage.
 | `tests/test_phase1_cross_clinic.py` | Cross-tenancy reads and writes refused server-side |
 | `tests/test_phase1_skeleton.py` | Login, entry creation, scoped views, latency floor |
 | `tests/test_provenance.py` | Pointer grammar, resolution, cross-clinic refusal |
+| `tests/test_sanitization.py` | Content safety; scans the frontend for raw-HTML sinks |
+| `tests/test_phase2_core.py` | Scribe redaction, Glance View contents, staleness, conflict rule |
 
 The four test files named in the brief (`test_rbac_scope.py`,
 `test_revision_history.py`, `test_highlight_provenance.py`,
 `test_concurrent_edits.py`) arrive in Phase 3, once the features they test
 exist.
+
+---
+
+## How the AI scribe works
+
+```
+POST /patients/{id}/scribe {"interaction_type": "doctor_patient_consult"}
+```
+
+1. A synthetic transcript is materialised for that patient, identifiers and all
+   (`services/transcripts.py` — every name, NRIC and phone number in it is
+   invented, and they are there so redaction has something real to remove).
+2. Each turn is redacted and stored **already redacted** as a
+   `TranscriptSegment`. The database never holds an identifying transcript.
+3. The redacted transcript goes to `llm_client.complete()`, which redacts again
+   — idempotent, and it cannot know what its caller did — and refuses to send if
+   anything identifying survives.
+4. The summary is parsed as JSON. With no API key the stub provider returns
+   non-JSON and a deterministic extractive summariser takes over, selecting the
+   highest-signal utterances using the same feature vocabulary the Glance View
+   scores on. `model_used` records which path ran, so the note never claims a
+   model wrote it when one did not.
+5. The result is stored as an `Entry` with `author_role=system`, the correct
+   `ai_*_summary` type, and `provenance_pointer` = `session://<session_id>`,
+   alongside an `AIScribedNote` carrying the session id, model, redaction count
+   and confidence.
+6. Highlights are generated and scored immediately, so the Glance View reads
+   rows rather than scoring on the hot path.
+
+**Confidence is derived, not asserted.** On the offline path it comes from
+hedging density in the source transcript: the seeded patient session (full of
+"maybe", "I think", "not sure") lands around 0.47 and is flagged for
+verification; the nurse consult, which is mostly measurements, lands around
+0.77. To run against a real model instead, set `CARENOTE_LLM_PROVIDER=anthropic`
+and `ANTHROPIC_API_KEY`; nothing else changes.
 
 ---
 
@@ -195,10 +243,20 @@ backend/
     core/       config, db, enums, provenance URIs, content-free logging
     security/   rbac.py (enforcement) · policy.py (rules) · auth.py (JWT)
     ai/         redaction.py (chokepoint) · llm_client.py (only LLM egress)
-    routes/     auth_routes.py · demo_rbac.py (throwaway, replaced in Phase 1)
+    routes/     auth · patients · entries · comments · highlights · glance
+                schemas.py (one entry wire format, used by every route)
+    services/   features (clinical vocabulary) · scoring (importance)
+                highlights (lifecycle) · glance (Top Card) · scribe (AI pipeline)
+                transcripts (synthetic fixtures) · interactions (learning signal)
     models.py   full SQLAlchemy schema
   init_db.py    create tables + seed synthetic fixture
-frontend/       React + Vite + Tailwind scaffold
+frontend/
+  src/
+    lib/          api.js (one fetch wrapper) · format.js (display vocabulary)
+    components/   GlanceView · Timeline · EntryCard · Comments
+                  VersionHistory · PatientHome · Primitives
+    App.jsx       shell: session, patient switching, provenance jump-to
+scripts/        phase1_smoke · phase2_smoke · bench_glance
 tests/
 docs/
 ARCHITECTURE.md  stack reasoning, component diagram, enforcement, security posture
@@ -211,22 +269,81 @@ ATTRIBUTION.txt  dependencies and licenses
 
 ## Current status
 
-Built and tested:
+### Built and working
 
-- Full data schema — entries, versions, comments, highlights, AI-scribed notes,
-  transcript segments, tasks, interaction/audit logs, feature weights, archive
-- RBAC: role + clinic, server-enforced, proven by tests and live HTTP
-- PHI redaction chokepoint with fail-closed verification
-- LLM wrapper with an offline deterministic default provider
-- Provenance pointer grammar and resolver
-- Content-free audit logging
-- Auth + seeded two-clinic synthetic fixture
-- Frontend scaffold (intentionally unstyled — design pass is Phase 6)
+| Area | State |
+|---|---|
+| Longitudinal timeline, all entry types | Full metadata, date-grouped, empty and processing states defined |
+| AI-vs-human distinction | Four independent signals: rail style, rail colour, typeface, explicit label |
+| AI scribe pipeline | Three interaction types, transcript → redaction → summary → Entry + provenance |
+| Provenance click-through | Lands on the character span, not just the note |
+| Glance View | What's new, ranked highlights with reasons, risk flags, AI-confidence flags, open actions |
+| Accept / reject | Single click, inline, immediate confirmation; rejections persist as signal |
+| Manual highlighting | Select text in any readable entry, including AI notes |
+| Threaded collaboration | Replies, resolve/unresolve, validated @mentions, task assignment |
+| Revision history | Every edit versions, diff between any two, revert as a new version |
+| Concurrency | Optimistic locking; stale writes refused with 409 carrying current state |
+| Conflict handling | Clinician precedence **and** a visible flag; disputed content never deleted |
+| Patient view | Plain language, calmer register, no scores or clinical shorthand |
+| Latency | Measured: P95 **11.15 ms** server handling against a 300 ms budget |
 
-Not built yet: the timeline UI, Glance View, AI scribe pipeline, comments and
-mentions, revision history UI, self-learning importance, data decay
-implementation, and voice capture. The `/demo/*` routes exist only to exercise
-the RBAC pattern and are replaced by real routes in Phase 1.
+### Partial or deliberately deferred
+
+- **Self-learning importance (Phase 4).** The scoring function has a `learned`
+  term that reads `FeatureWeight` and returns 0.0 because nothing writes to that
+  table yet. `InteractionLog` rows **are** being written now — every manual
+  highlight, edit, comment, accept and reject records the feature tags of what
+  was touched — so Phase 4 starts with real behavioural history rather than an
+  empty table. Today's ranking is purely rule-based, and the UI says so by
+  showing the score breakdown.
+- **Data decay (Phase 4).** `DecayState` and `EntryArchive` are modelled and the
+  scoring path already applies a decay multiplier. Nothing transitions entries
+  between states yet.
+- **Voice capture (Phase 5).** Not started. The scribe pipeline already consumes
+  turn-structured input with speaker labels and timings, so the transcription
+  source can be swapped without changing anything downstream.
+- **The four brief-named test files (Phase 3).** `test_rbac_scope.py`,
+  `test_revision_history.py`, `test_highlight_provenance.py` and
+  `test_concurrent_edits.py` arrive in Phase 3. The behaviours they will cover
+  are already exercised by `test_phase2_core.py` and the smoke scripts, but the
+  files are graded by name and will be written as specified.
+- **Real-time multi-user sync.** No WebSocket, no live cursors. Optimistic
+  locking covers the collision case the brief names; presence would be demo
+  polish paid for in infrastructure.
+- **Timeline pagination.** Correct at seed scale, wrong at real scale. Deferred
+  with a measured reason: the Glance View P95 is ~11 ms at current depth.
+
+### Known gaps, stated plainly
+
+**This build is not safe for real PHI as-is.** Specifically:
+
+- **No token refresh, rotation or revocation.** Logout clears the cookie; a
+  token copied elsewhere stays valid until it expires (60 minutes).
+- **No login rate limiting.**
+- **No TLS and no encryption at rest locally.** Both are documented decisions
+  that terminate at the proxy and storage layer in production, not implemented
+  here.
+- **Redaction is regex plus a name gazetteer, not clinical NER.** Lowercase or
+  transliterated names in running prose can survive. Fails closed on anything it
+  does detect post-redaction, but recall is bounded by the patterns.
+- **The scribe pipeline is synchronous.** A crash mid-run loses the summary
+  rather than leaving a retryable job.
+- **Importance scoring is keyword-based.** A medication absent from the
+  watchlist scores as ordinary prose — a recall gap, not a safety gap: an
+  unrecognised term is simply not promoted, and the entry still sits in the
+  timeline for a human to read.
+
+### Accessibility posture
+
+Implemented: every risk and confidence indicator pairs colour with words and a
+shape, so no meaning is carried by colour alone; keyboard focus is visible
+throughout; the AI-vs-human distinction survives in greyscale; reduced-motion is
+respected on the one animated element.
+
+Not done: no formal WCAG or contrast audit has been run, no screen-reader pass,
+and the interface has not been tested with assistive technology. The colour
+choices are inherited from the Phase 0 token set and are plausible but
+unverified.
 
 ---
 
@@ -247,6 +364,11 @@ the RBAC pattern and are replaced by real routes in Phase 1.
 | Login rate limiting | **Known gap** |
 | TLS in transit | Documented decision — terminates at the proxy in production |
 | Encryption at rest | Documented decision — managed-Postgres encryption in production |
+| AI note immutability | Implemented — no role can edit an AI summary in place; corrections supersede |
+| Comment isolation from patients | Implemented — refused at the route *and* stamped internal at write |
+| Provenance as reference, not authority | Implemented — pointer resolution is clinic-scoped |
+| Scribe failure recovery | **Known gap** — synchronous; a crash mid-run loses the summary |
+| Redaction recall on unanticipated names | **Known gap** — patterns + gazetteer only |
 
 Full reasoning, including why content is deliberately **not** HTML-escaped
 before storage (clinical text contains `BP <120/80` and `dose <5mg`, and

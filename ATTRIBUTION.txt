@@ -69,10 +69,35 @@ If Phase 5 (voice capture) is built, any speech-to-text model added must be
 listed here at the moment it is added.
 
 
+PHASE 2 — NO NEW DEPENDENCIES
+-----------------------------
+Phase 2 added the entire product surface (timeline, AI scribe pipeline, Glance
+View, collaboration, revision history) without adding a single new library to
+either requirements.txt or package.json. Checked by reading the imports, not by
+trusting the manifests.
+
+Specifically:
+  * Diffing uses difflib from the Python standard library, not a diff package.
+  * Summarisation on the offline path is written in this repository
+    (backend/app/services/scribe.py), not a summarisation library.
+  * Typography uses system font stacks (ui-sans-serif, ui-monospace). No webfont
+    is downloaded, so no font license applies and the build runs offline.
+  * No Markdown renderer was introduced. This is deliberate and enforced by
+    tests/test_sanitization.py, which fails the build if one appears in
+    package.json without the raw-HTML-disabled review (DECISIONS.md D-015).
+  * No charting, date, state-management or component library was added.
+
+
 DATA
 ----
 All data in this repository is SYNTHETIC and was written by hand for this
-project (backend/init_db.py, and the sample strings inside tests/).
+project (backend/init_db.py, backend/app/services/transcripts.py, and the sample
+strings inside tests/).
+
+The consult transcripts in services/transcripts.py contain invented names,
+NRIC-format identifiers and phone numbers. They are placed there deliberately so
+that the redaction chokepoint has real identifiers to remove and the removal can
+be demonstrated rather than asserted.
 
 No external dataset is used. No real patient data has been used at any point,
 and no real record was ever accessible to this system.

@@ -75,6 +75,51 @@ a Python service doubles the surface where a scoping check can go missing).
 
 ---
 
+## Phase 2 components
+
+Everything below sits behind the same `AccessScope` dependency and the same
+redaction chokepoint; no Phase 2 feature reaches the database or a model by a
+new path.
+
+```
+                    ┌──────────────────────────────────────────┐
+  transcript ─────► │ services/scribe.run_scribe               │
+  (fixture or       │   redact_phi per segment  ──► segments    │
+   Phase 5 audio)   │   llm_client.complete     ──► summary     │
+                    │   (redacts again, fails closed)          │
+                    └───────────────┬──────────────────────────┘
+                                    │  Entry(author_role=system)
+                                    ▼  + AIScribedNote + provenance
+  manual write ────►  Entry ──► services/highlights.refresh_entry_highlights
+                                    │        │
+                                    │        └─► services/features.tag_span
+                                    │                    (tags + human reasons)
+                                    │        └─► services/scoring.score_span
+                                    │                    (recency|risk|entity|
+                                    │                     action|learned)
+                                    ▼
+                              Highlight rows  ──── read by ───►  services/glance
+                                    ▲                                   │
+  clinician accept/reject ──────────┘                                   ▼
+        │                                                    GET /patients/{id}/glance
+        └──► services/interactions.record_interaction ──► InteractionLog
+                                                              │
+                                                              ▼  (Phase 4)
+                                                        FeatureWeight
+                                                              │
+                                                              └──► scoring.learned_component
+```
+
+The loop is closed everywhere except the last arrow. `InteractionLog` rows are
+written from Phase 2 onward; `FeatureWeight` is read but not yet written, so the
+learned term contributes exactly 0.0 and today's ranking is purely rule-based.
+Phase 4 adds the aggregation and nothing downstream changes shape.
+
+**Scoring is precomputed on write.** This is the decision the latency figure
+rests on — see *Latency* below.
+
+---
+
 ## How RBAC is enforced
 
 **File:** `backend/app/security/rbac.py` (mechanism) and
@@ -129,7 +174,7 @@ authorship, so an admin account cannot quietly alter the record.
 
 ---
 
-## API surface (as of Phase 1)
+## API surface (as of Phase 2)
 
 | Route | Roles | Notes |
 |---|---|---|
@@ -141,8 +186,30 @@ authorship, so an admin account cannot quietly alter the record.
 | `GET /patients/{id}/entries` | any authenticated | Timeline, type-filtered per role in SQL (D-023) |
 | `POST /patients/{id}/entries` | staff, clinician, patient | Type must be in the role's `WRITABLE_TYPES`; AI types refused (D-025) |
 | `GET /entries/{id}` | any authenticated | The direct-API path an attacker uses; both dimensions apply |
+| `PATCH /entries/{id}` | writable types only | Optimistic locking on `expected_version`; 409 carries current state |
+| `GET /entries/{id}/versions` | any who may read the entry | Full history, including for AI notes |
+| `GET /entries/{id}/diff` | any who may read the entry | Structured `{op, text}` operations, never rendered markup |
+| `POST /entries/{id}/revert` | writable types only | Appends a new version; never rolls the number back |
+| `POST /entries/{id}/supersede` | clinician | Clinician correction of AI/patient content (D-007) |
+| `GET/POST /entries/{id}/comments` | staff, clinician, admin | Patients refused outright, not filtered |
+| `POST /comments/{id}/resolve` · `/unresolve` | staff, clinician, admin | Reopening matters as much as resolving |
+| `GET/POST /patients/{id}/tasks` | staff, clinician, admin | Assignment is clinic-scoped at the query |
+| `POST /tasks/{id}/status` | staff, clinician, admin | Closing a task rescores the entry's highlights |
+| `GET /clinic/users` | staff, clinician, admin | Mention/assignment directory; patients excluded |
+| `GET /patients/{id}/highlights` | staff, clinician, admin | Type-filtered — never quotes an entry the role cannot read |
+| `POST /highlights/{id}/accept` · `/reject` | clinician | Single POST, no body — interaction cost is the design |
+| `POST /entries/{id}/highlights` | clinician | Manual highlight, allowed on read-only entry types |
+| `POST /patients/{id}/highlights/refresh` | clinician, admin | Rescore on demand; makes learning demonstrable |
+| `GET /provenance?pointer=` | any authenticated | Clinic-scoped resolution; a pointer is never an authorisation |
+| `GET /patients/{id}/glance` | staff, clinician, admin | The Top Card. Reads precomputed scores |
+| `GET /patients/{id}/my-care` | patient | Plain-language patient view; patient role only |
+| `GET /scribe/templates` | any authenticated | Available synthetic transcripts |
+| `POST /patients/{id}/scribe` | staff, clinician, patient | Patients limited to their own AI session type |
 | `GET /health` | — | Liveness |
 | `/demo/*` | — | Phase 0 pattern demo, scheduled for deletion in Phase 3 (D-026) |
+
+Every response carries `X-Response-Time-Ms` from a middleware wrapping the whole
+app — the instrument behind the latency figures below.
 
 Not one handler in `patient_routes.py` mentions `clinic_id` in a filter. Every
 read goes through `AccessScope`, which applies the clinic predicate itself. That
@@ -229,29 +296,61 @@ patient names after exercising every route (clean).
 
 ## Latency
 
-Target: Glance View P95 ≤ 300 ms on a warm path. The Glance View does not exist
-until Phase 2.4, so this is still not measurable.
+Target: Glance View P95 ≤ 300 ms on a warm path.
 
-Groundwork: a composite index on `(patient_id, timestamp)` covers the timeline's
-hot query, and `clinic_id` is indexed on every scoped table so the RBAC
-predicate is never a table scan. The role-based type filter is applied as a SQL
-`IN` clause on the indexed `type` column rather than in Python (D-023), so it
-narrows the scan instead of widening it.
+### Measured
 
-**Phase 1 reading — a floor, not a measurement.**
-`tests/test_phase1_skeleton.py` times 20 warm, in-process reads of
-`GET /patients/{id}/entries` against SQLite. Observed P95 is single-digit
-milliseconds. That number excludes the network, the browser, JSON transfer, the
-Glance View's scoring pass, and any dataset larger than seven seeded rows — so
-it is a **lower bound on real latency**, recorded so Phase 2 can see how much
-budget each feature spends as it lands on this path. It is not evidence the
-300 ms target is met, and the final brief must not quote it as though it were
-(DECISIONS.md D-027).
+`scripts/bench_glance.py`, 200 iterations after 20 discarded warm-up requests,
+against a chart of 8 entries carrying 6 highlights, SQLite on local disk:
 
-The honest measurement needs the real Glance View, a seeded dataset of realistic
-size, and timing taken at the browser. Method will be recorded here in Phase 2.4
-and the reported figure will be a distribution over repeated warm requests, not
-a single sample.
+| Segment | p50 | **p95** | p99 | max |
+|---|---|---|---|---|
+| Server handling (`X-Response-Time-Ms`) | 9.71 ms | **11.15 ms** | 12.89 ms | 43.57 ms |
+| In-process wall clock | 10.63 ms | 12.25 ms | 13.94 ms | 44.69 ms |
+
+**P95 server handling: 11.15 ms, against a 300 ms budget.**
+
+### Method, and what the number excludes
+
+Timing comes from a middleware that wraps every request and reports
+`X-Response-Time-Ms`: the request arriving, every query running, the payload
+serialising, the response leaving. That is the segment the application controls.
+
+It **excludes network transit and browser render.** Those depend on where the
+service is deployed and what it is opened on; folding a developer machine's
+loopback into the figure would be inventing precision. The client measures its
+own full round trip separately and displays both numbers in the Glance View
+header, so the two segments are never conflated in the demo either.
+
+Warm path means the first 20 iterations are discarded — they pay for connection
+setup, SQLAlchemy compiling each query for the first time, and a cold page
+cache. None of that is what a clinician opening their fifth chart of the morning
+experiences.
+
+### What the number is actually evidence for
+
+Not that the product is fast on real infrastructure — SQLite on local disk with
+8 entries is not that test. What it establishes is that **application work is a
+small fraction of the budget**, and specifically that no N+1 is hiding in the
+hot path. Two design decisions are what that rests on:
+
+- **Highlight scores are computed on write, not on read.** Creating, editing or
+  AI-scribing an entry runs `refresh_entry_highlights`; the Glance View reads
+  precomputed rows and sorts them. Scoring the timeline per request would put an
+  O(entries × sentences) loop inside the budget for no benefit, since the inputs
+  only change when someone writes.
+- **Timeline enrichment is batched.** Author names, AI provenance, comment counts
+  and highlight counts are four grouped queries regardless of chart size
+  (`patient_routes.enrich_entries`). Fetching them per row turns a 20-entry chart
+  into 80 round trips.
+
+### Honest limits
+
+A real deployment means Postgres over a network, hundreds of entries per
+patient, and concurrent load — none of which this measures. The headroom is
+large enough (roughly 27×) that the conclusion is unlikely to invert, but the
+measurement that would settle it is a loaded staging environment, not this
+script. Recorded as a known gap rather than smoothed over.
 
 ---
 
@@ -280,6 +379,12 @@ Three statuses are used throughout, and they mean different things:
 | TLS in transit | **Documented decision** — terminates at the proxy in production |
 | Encryption at rest | **Documented decision** — managed-Postgres volume encryption in production |
 | Password hashing | **Documented decision** — PBKDF2 120k rounds; argon2id in production |
+| Highlight staleness on edit | **Implemented** — anchored to a version, never silently re-anchored (D-030) |
+| AI provenance and confidence | **Implemented** — session pointer, model path, redaction count, derived confidence, all surfaced |
+| Conflict handling | **Implemented** — clinician precedence *and* a visible flag; disputed content never deleted |
+| Comment isolation from patients | **Implemented** — refused at the route *and* stamped `is_internal` at write |
+| Scribe failure recovery | **Known gap** — synchronous pipeline; a crash mid-run loses the summary rather than leaving a retryable job (D-032) |
+| Redaction recall on unanticipated names | **Known gap** — gazetteer + patterns only; lowercase and transliterated names in running prose can survive (D-012) |
 
 **The current build is not safe for real PHI as-is.** This is stated in the
 README as well as here, deliberately, so it cannot be missed by a reader who

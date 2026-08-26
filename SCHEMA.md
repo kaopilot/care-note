@@ -30,6 +30,8 @@ erDiagram
 
     USER ||--o{ INTERACTION_LOG : "generates signal"
     USER ||--o{ AUDIT_LOG : "is actor in"
+    USER ||--o{ PATIENT_VIEW : "last looked at"
+    PATIENT ||--o{ PATIENT_VIEW : "seen by"
     CLINIC ||--o{ FEATURE_WEIGHT : "learns per-clinic"
 
     CLINIC {
@@ -313,3 +315,83 @@ not appear anywhere in its audit row.
 refuses a pointer whose target lives in another clinic, so a syntactically valid
 pointer cannot be used as a side channel around the RBAC layer. Verified against
 the seeded AI note.
+
+---
+
+## Phase 2 additions
+
+### New entity: `PATIENT_VIEW`
+
+```mermaid
+erDiagram
+    PATIENT_VIEW {
+        string id PK
+        string user_id FK
+        string patient_id FK
+        string clinic_id FK
+        datetime last_viewed_at "moves on every page load"
+        datetime previous_viewed_at "the held comparison point"
+        int view_count
+    }
+```
+
+Two timestamps rather than one. `last_viewed_at` advances every load;
+`previous_viewed_at` is what "new since your last visit" actually compares
+against, and only rolls forward once more than twenty minutes have passed. With
+a single timestamp, opening the Glance View would clear the very thing it just
+showed you — a refresh, or a second monitor, and the news is gone (D-033).
+
+Unique on `(user_id, patient_id)`: the marker is per person, not per clinic.
+Two clinicians reading the same chart have different ideas of what is new,
+because they last looked at different times.
+
+### How the required relationships link up, end to end
+
+The brief asks for Entries ↔ Comments ↔ Versions ↔ Highlights ↔ Provenance ↔
+AI_Scribed_Notes. As built:
+
+| Link | Mechanism | Where |
+|---|---|---|
+| Entry → Version | `Version.entry_id`, unique on `(entry_id, version_number)`; `Entry.current_version_id` points at the head | `entry_routes._append_version` |
+| Entry → Comment | `Comment.entry_id`; self-referencing `parent_comment_id` gives threads | `comment_routes.list_comments` |
+| Entry → Highlight | `Highlight.entry_id` **plus** `source_version_number` — a highlight belongs to an entry *at a version* | `services/highlights.py` |
+| Entry → AIScribedNote | one-to-one on `entry_id` (unique), set only by the scribe pipeline | `services/scribe.run_scribe` |
+| AIScribedNote → TranscriptSegment | shared `session_id`, not a foreign key — segments outlive any one summary | `core/provenance.resolve` |
+| Highlight → source span | `provenance_pointer` = `entry://<id>#span:<start>-<end>` | `core/provenance.entry_pointer` |
+| Entry → originating session | `provenance_pointer` = `session://<session_id>` | `services/scribe.run_scribe` |
+| Entry → superseded Entry | `supersedes_entry_id` on the correction, `conflict_flagged` on the original | `entry_routes.supersede_entry` |
+| Interaction → learned weight | `InteractionLog.content_features` (tags) aggregated into `FeatureWeight` keyed `(clinic_id, feature_tag)` | Phase 4; tags written from Phase 2 |
+
+The learning path is worth stating explicitly because it is the one link that is
+not yet closed. `InteractionLog` rows are written from Phase 2 onward — every
+manual highlight, edit, comment, accept and reject records the *feature tags* of
+what was touched. `FeatureWeight` is read by `scoring.learned_component()` and
+currently returns 0.0 because nothing writes to it yet. Phase 4 closes the loop
+by aggregating the former into the latter; no schema change is required, and no
+scoring consumer changes shape.
+
+### Why highlights carry a version number
+
+`Highlight.source_version_number` is the anchor. Staleness is a comparison, not
+a stored flag:
+
+```python
+stale = highlight.source_version_number != entry.version_number
+```
+
+A stale highlight resolves its span text against the `Version` snapshot it was
+made against, not against current content. Storing a boolean would mean an edit
+has to remember to update every highlight on the entry; deriving it means the
+answer cannot drift from the truth (D-030).
+
+### Two things deliberately *not* modelled
+
+**No `Notification` table.** Mentions store user ids on the comment. A real
+notification system needs delivery state, read receipts and a channel per user;
+none of that is exercised by the brief, and a half-built one implies a promise
+the product cannot keep.
+
+**No `Session` table for AI-patient sessions.** `session_id` is a string shared
+by `AIScribedNote` and `TranscriptSegment` rather than a row. The pointer
+grammar already resolves it, and a table would add a join to every provenance
+lookup to store a value that is only ever an identity.
