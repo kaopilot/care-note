@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 from app.core.audit_logging import log_event
 from app.core.config import settings
 from app.core.db import get_db
-from app.models import User
+from app.models import Clinic, User
 from app.security.auth import create_access_token, verify_password
+from app.security.rbac import AccessScope, require_access
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -76,6 +77,49 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
         clinic_id=user.clinic_id,
         user_id=user.id,
         expires_in_minutes=settings.jwt_ttl_minutes,
+    )
+
+
+class MeResponse(BaseModel):
+    user_id: str
+    role: str
+    clinic_id: str
+    clinic_name: str
+    name: str
+    patient_id: str | None = None
+    viewable_types: list[str]
+
+
+@router.get("/me", response_model=MeResponse)
+def me(scope: AccessScope = Depends(require_access())) -> MeResponse:
+    """Who is this session? Read from the token, never from the request body.
+
+    This exists so the browser can restore its session after a page refresh
+    *without persisting anything client-side*. The token lives only in the
+    httpOnly cookie (D-016); if the frontend had to remember the role itself it
+    would need somewhere to put it, and the obvious somewhere is localStorage —
+    which is exactly what D-016 rules out. One cheap round-trip removes the
+    temptation. See DECISIONS.md D-020.
+    """
+    user = scope.get_or_404(User, scope.user_id)
+
+    # Clinic is the tenant row itself: it has `id`, not `clinic_id`, so
+    # AccessScope.query() refuses it (fail-closed by design). This is the
+    # documented explicit handling that refusal asks for — and it is safe
+    # because the id being looked up IS scope.clinic_id, which came from the
+    # verified token. No caller-supplied value reaches this query.
+    clinic = scope.db.query(Clinic).filter(Clinic.id == scope.clinic_id).first()
+    if clinic is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clinic not found")
+
+    return MeResponse(
+        user_id=user.id,
+        role=str(user.role),
+        clinic_id=user.clinic_id,
+        clinic_name=clinic.name,
+        name=user.name,
+        patient_id=user.patient_id,
+        viewable_types=scope.viewable_types(),
     )
 
 
