@@ -6,7 +6,13 @@ Maintenance rule: append here THE MOMENT a dependency is added, in the phase
 that adds it. Do not reconstruct this file from requirements.txt at the end —
 that is how things get missed.
 
-Last updated: Phase 0 (2026-08-25)
+Last updated: Phase 1 (2026-08-26)
+
+PHASE 1 ADDED NO DEPENDENCIES. The walking skeleton was built entirely on the
+Phase 0 stack: FastAPI routing, SQLAlchemy queries, pydantic models, React
+state. httpx was already present as a test/LLM dependency and is reused by
+scripts/phase1_smoke.py. This line exists so the absence is a recorded fact
+rather than something Phase 6 has to infer from an unchanged requirements.txt.
 
 
 BACKEND (Python) — see backend/requirements.txt

@@ -25,7 +25,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp ../.env.example ../.env                            # optional; defaults work
-python init_db.py                                     # create tables + seed
+python init_db.py --reset                             # create tables + seed
 uvicorn app.main:app --reload                         # http://localhost:8000
 
 # 2. Frontend (second terminal)
@@ -49,23 +49,68 @@ cross-clinic isolation can be *demonstrated*, not merely asserted.
 | `patient_a` | patient | Clinic A |
 | `clinician_b` | clinician | Clinic B |
 | `staff_b` | staff | Clinic B |
+| `admin_b` | admin | Clinic B |
+| `patient_b` | patient | Clinic B |
+
+Clinic B is a full mirror of Clinic A rather than a stub, so cross-clinic
+refusals can be proved in **both** directions.
+
+### Seeing the scoping work
+
+Sign in as each of `clinician_a`, `staff_a`, `admin_a`, `patient_a` and look at
+the same patient (Amira Rahman). The timeline is different every time, and the
+difference is decided server-side:
+
+| Role | Entries visible | Not visible |
+|---|---|---|
+| clinician | 5 | — |
+| admin | 5 | — (oversight: reads all, authors nothing) |
+| staff | 4 | `clinician_section` (documented assumption D-004) |
+| patient | 2 | staff notes, clinician sections, raw AI notes |
+
+The UI is not doing this filtering. `GET /patients/patient-a1/entries` returns
+different rows depending on the token, and asking for a hidden entry by id
+directly still fails — which is what `scripts/phase1_smoke.py` demonstrates.
+
+### End-to-end walkthrough
+
+With the backend running:
+
+```bash
+python scripts/phase1_smoke.py
+```
+
+29 checks over real HTTP: all eight logins, the four scoped views, one entry
+written through the API, then cross-role and cross-clinic attacks straight at
+the endpoints. Exits non-zero if any check fails.
 
 ---
 
 ## Running tests
 
 ```bash
-pytest tests/ -v            # from the repository root
-pytest tests/ -v -k rbac    # just the access-control tests
+pytest tests/ -v                  # from the repository root — 146 tests
+pytest tests/ -v -k rbac          # the Phase 0 enforcement-pattern tests
+pytest tests/ -v -k phase1        # the walking-skeleton proofs (50 tests)
+pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 ```
 
-63 tests, all passing, no API key or network required.
+146 tests, all passing, no API key or network required.
+
+The two Phase 1 access-control suites were **mutation-checked** — deliberately
+broken to confirm they can fail. Reversing D-004 in `policy.py` fails exactly
+the two staff-visibility tests; removing the clinic filter from
+`AccessScope.query()` fails 12 of the 15 cross-clinic tests. A security test
+that cannot fail is worse than no test, because it gets mistaken for coverage.
 
 | File | Covers |
 |---|---|
 | `tests/test_rbac_pattern.py` | Role and clinic enforcement, server-side, via HTTP |
 | `tests/test_redaction.py` | PHI detection, consistency, idempotence, and stated gaps |
 | `tests/test_llm_chokepoint.py` | That the redaction boundary cannot be bypassed |
+| `tests/test_phase1_cross_role.py` | Cross-role reads and writes refused server-side |
+| `tests/test_phase1_cross_clinic.py` | Cross-tenancy reads and writes refused server-side |
+| `tests/test_phase1_skeleton.py` | Login, entry creation, scoped views, latency floor |
 | `tests/test_provenance.py` | Pointer grammar, resolution, cross-clinic refusal |
 
 The four test files named in the brief (`test_rbac_scope.py`,

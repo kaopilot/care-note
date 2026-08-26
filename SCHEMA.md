@@ -275,3 +275,41 @@ The safety constraint on decay: an entry is never eligible for `cold` while it
 has an unresolved `Task`, an open `Comment`, or an accepted `Highlight`. Old
 does not mean unimportant, and an outstanding action is the clearest possible
 signal that something still matters.
+
+---
+
+## Phase 1 additions
+
+No schema changes. The Phase 0 model set covered the walking skeleton without
+alteration, which was one of the things Phase 1 was meant to find out. What
+changed is which invariants are now *enforced by code* rather than only
+intended:
+
+**`Entry.provenance_pointer` is never null in practice.** The column remains
+nullable in the model, but every write path sets it (D-024):
+
+| Entry origin | Pointer |
+|---|---|
+| Manually authored | `entry://<its own id>` — written here, not derived |
+| AI-scribed | `session://<session_id>` — resolves via `AIScribedNote` to the interaction |
+
+Leaving it null for manual notes was the alternative. Rejected: every consumer
+would need a null branch, and the first to forget it produces an entry with no
+traceable origin, in a product whose central claim is that everything is
+traceable.
+
+**Every `Entry` has a `Version` from the moment it exists.** `create_entry` and
+the seed both write `Version` number 1 and set `current_version_id` in the same
+transaction. No row can exist with a `version_number` that has no corresponding
+`Version`, so Phase 2's revision history only ever appends rather than having to
+back-fill an origin.
+
+**`AuditLog.audit_metadata` carries a content *length*, never content.** For
+`entry.create` it holds `{type, version, content_length, injection_markers}`.
+Asserted in `test_phase1_skeleton.py`: a note body written into an entry does
+not appear anywhere in its audit row.
+
+**Provenance resolution is clinic-scoped.** `resolve(db, pointer, clinic_id=…)`
+refuses a pointer whose target lives in another clinic, so a syntactically valid
+pointer cannot be used as a side channel around the RBAC layer. Verified against
+the seeded AI note.

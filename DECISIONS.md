@@ -279,3 +279,174 @@ Considered multilingual patient summaries and OCR-based handwritten note capture
 
 Multilingual summaries: low-cost future path (extend the existing Phase 2.2 LLM call to emit a second-language summary when a patient's preferred language is set) — deferred only for time, not architecture.
 Handwriting OCR: deferred structurally, not just for time. It's a different ingestion pipeline (image → OCR → redact → summarize), redaction is materially harder on noisy OCR output than clean transcript text, and medical handwriting OCR accuracy is a hard problem even for well-resourced products. Ambient voice capture (Phase 5) already solves the underlying "fast unstructured capture" need more safely.
+---
+
+## Phase 1 — Walking skeleton (2026-08-26)
+
+Nothing in the Phase 0 RBAC design had to change. `AccessScope` absorbed the
+first real feature routes without a single handler needing to mention
+`clinic_id`, which is the property Phase 1 existed to test. The entries below
+are additions and clarifications, not reversals.
+
+### D-020 · `GET /auth/me` — session restore without client-side storage
+
+The browser holds its token only in the httpOnly cookie (D-016), which
+JavaScript cannot read by design. Without a "who am I" route, the frontend would
+have to remember its own role and clinic across a page refresh, and the obvious
+place to put that is `localStorage` — precisely what D-016 exists to prevent.
+One cheap authenticated round-trip removes the temptation entirely.
+
+`/auth/me` reads everything from the verified token. It accepts no parameters,
+so there is nothing for a caller to supply.
+
+**Cost:** one extra request on page load. Accepted; the alternative was a
+storage decision we had already ruled out.
+
+### D-021 · `Clinic` is looked up explicitly, not through `AccessScope.query()`
+
+`AccessScope.query()` refuses any model without a `clinic_id` column
+(fail-closed, D-003). `Clinic` is the tenant row *itself* — it has `id`, not
+`clinic_id` — so the guard fires on it correctly.
+
+Rather than weaken the guard by special-casing `Clinic` inside `AccessScope`,
+`/auth/me` queries it directly with a comment stating why. This is the
+"handle it explicitly with a documented reason" escape the Phase 0 error message
+asks for.
+
+It is safe because the id being looked up **is** `scope.clinic_id`, which came
+from the verified token. No caller-supplied value reaches that query.
+
+**Cost:** a precedent that could be cargo-culted. Any future direct
+`scope.db.query()` must carry the same justification or it is a bug. Phase 3
+should add a test that greps route modules for `scope.db.query(` and requires an
+adjacent justification comment.
+
+### D-022 · Cross-clinic misses return 404, cross-role refusals return 403
+
+Two different refusals, deliberately, and the tests assert the specific codes so
+a refactor cannot quietly collapse them:
+
+* **Cross-clinic → 404.** A 403 means "this exists and you may not have it",
+  which turns every endpoint into an enumeration oracle: an attacker walks ids
+  and learns which patients exist at other clinics without ever reading one.
+  404 tells them nothing.
+* **Cross-role, same clinic → 403.** Here the caller is a legitimate user of a
+  record that genuinely exists in their own clinic; they are simply not
+  permitted this slice of it. Returning 404 would be lying to a colleague, and
+  it makes real permission problems undebuggable.
+
+**Cost:** the distinction is subtle and easy to lose. Mitigated by asserting the
+exact status code in `test_phase1_cross_clinic.py` rather than `in (403, 404)`.
+
+### D-023 · Type filtering is pushed into SQL, not applied after fetching
+
+`list_entries` filters with `Entry.type.in_(viewable_types_for(role))` in the
+query rather than fetching the timeline and dropping rows in Python.
+
+Filtering in Python means rows the caller may not see are briefly in process
+memory, where a stray log line, an exception repr, a `len(rows)` in a later
+refactor, or a debugger can expose them. Never loading them is a stronger
+property than loading and discarding them.
+
+**Cost:** the policy matrix must be expressible as a SQL predicate. If a later
+rule needs per-row logic (e.g. "staff may see a clinician section they are
+named in"), this pattern has to be revisited rather than quietly abandoned.
+
+### D-024 · Manual entries are their own provenance; AI entries point at a session
+
+Every timeline entry carries a non-null `provenance_pointer`. For a manually
+authored note that pointer is `entry://<its own id>` — it was written here, not
+derived from anything. For an AI-scribed note it is `session://<session_id>`,
+resolving back through `AIScribedNote` to the interaction that produced it.
+
+The alternative was leaving `provenance_pointer` null for manual notes. Rejected
+because every consumer would then need a null branch, and the first one to
+forget it produces an entry with no traceable origin — in a product whose
+central claim is that everything is traceable.
+
+`resolve()` enforces the clinic boundary on pointers too, so a valid pointer
+string cannot be used to read across tenancy.
+
+**Cost:** a self-referential pointer looks redundant. It is: the value is in the
+invariant holding without exceptions, not in the pointer itself.
+
+### D-025 · AI-scribed types cannot be created through the manual write route
+
+`POST /patients/{id}/entries` refuses any type in `AI_SCRIBED_TYPES` outright,
+before the role check. Those entries carry `author_role=system` and must
+originate from the Phase 2.2 scribe pipeline, which routes through
+`redact_phi()`.
+
+If a clinician could POST one, a client could fabricate machine provenance —
+and provenance is the product's trust claim. It would also route text around the
+redaction chokepoint, since the manual write path has no reason to call it.
+
+**Cost:** Phase 2.2's pipeline must construct entries through a service function
+rather than by calling this route internally.
+
+### D-026 · Phase 0's demo routes stay for now
+
+`/demo/*` and `tests/test_rbac_pattern.py` are retained even though real routes
+now exist. They prove the enforcement pattern independently of any feature,
+which is a useful second opinion while the feature surface is one module.
+
+Phase 3 folds those assertions into the real-route suite and deletes both.
+Recorded here so it is a scheduled removal rather than dead code nobody dares
+touch.
+
+### D-027 · Phase 1 latency figure is a lower bound, not a measurement
+
+The brief targets P95 ≤ 300ms for the Glance View on a warm path. There is no
+Glance View yet, so `test_phase1_skeleton.py` measures its cheapest ancestor: 20
+warm, in-process timeline reads against SQLite, no network, no browser, no
+serialisation over the wire.
+
+Observed P95 is single-digit milliseconds. That number is **not** evidence the
+target is met — it is a floor, recorded now so Phase 2 can watch how much of the
+budget highlights, comments and AI summaries consume as they land on this same
+path. The honest measurement needs the real Glance View, a seeded dataset of
+realistic size, and timing taken at the browser.
+
+**Cost:** none, provided the caveat travels with the number. Phase 6's brief must
+not quote the figure without it.
+
+### D-028 · Test fixtures were added alongside Phase 0's, not merged into them
+
+Phase 0's `seeded` fixture is asserted against exactly (`== ["patient-a1"]`), so
+widening it to Phase 1's richer seed would have broken passing tests that were
+testing something real. `seeded_p1` / `client_p1` sit beside it.
+
+**Cost:** two fixtures to keep roughly in step with `init_db.py`. Cheaper than
+either editing Phase 0's assertions to accommodate new data, or having Phase 1
+test against a seed too thin to distinguish four roles.
+
+### Deferred / cut in Phase 1
+
+* **Entry editing and revision history.** `Version` v1 is written at creation so
+  no entry exists without one, but there is no edit route yet. Phase 2.7 owns
+  optimistic locking and conflict handling; building half of it here would mean
+  building it twice.
+* **Pagination on the timeline.** Correct at seed scale and wrong at real scale.
+  Deferred deliberately: it interacts with the Glance View's scoring and with
+  Phase 4's decay states, and choosing a cursor scheme before those exist would
+  be guessing.
+* **A `system` role login.** `Role.SYSTEM` is an `author_role`, not an account.
+  No credentials are seeded for it and none should be.
+* **Frontend routing / state library.** One component tree, no router. The UI is
+  scaffolding for the plumbing; investing here before Phase 6's design pass
+  would be wasted.
+
+### Open questions carried into Phase 2
+
+* The frontend XSS source scan is a plain-text search, so it fails on its own
+  documentation — naming the forbidden props in a comment trips it. Worked
+  around by rewording. If Phase 2 adds more frontend files this will recur;
+  consider scanning with a JSX-aware parse, or excluding comment nodes.
+* `list_entries` returns full content for every entry in the timeline. Fine at
+  seed scale; once the Glance View exists, the list endpoint should probably
+  return summaries and defer bodies to the detail route.
+* Admin currently has the clinician's full read surface. That satisfies
+  "clinic-scoped oversight across all patient data", but an oversight role
+  arguably should not read clinical reasoning by default. Left as is because the
+  brief's wording is explicit; flagged because it is the most privileged read
+  path in the system.

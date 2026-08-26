@@ -129,6 +129,36 @@ authorship, so an admin account cannot quietly alter the record.
 
 ---
 
+## API surface (as of Phase 1)
+
+| Route | Roles | Notes |
+|---|---|---|
+| `POST /auth/login` | — | Sets httpOnly cookie; also returns a bearer token for non-browser clients |
+| `GET /auth/me` | any authenticated | Session restore without client-side storage (D-020) |
+| `POST /auth/logout` | — | Clears the cookie; tokens stay valid until expiry (no denylist) |
+| `GET /patients` | any authenticated | Clinic-scoped; a patient login sees only itself |
+| `GET /patients/{id}` | any authenticated | 404 across clinics, 403 for the wrong patient (D-022) |
+| `GET /patients/{id}/entries` | any authenticated | Timeline, type-filtered per role in SQL (D-023) |
+| `POST /patients/{id}/entries` | staff, clinician, patient | Type must be in the role's `WRITABLE_TYPES`; AI types refused (D-025) |
+| `GET /entries/{id}` | any authenticated | The direct-API path an attacker uses; both dimensions apply |
+| `GET /health` | — | Liveness |
+| `/demo/*` | — | Phase 0 pattern demo, scheduled for deletion in Phase 3 (D-026) |
+
+Not one handler in `patient_routes.py` mentions `clinic_id` in a filter. Every
+read goes through `AccessScope`, which applies the clinic predicate itself. That
+is the property Phase 1 was built to test, and it held: the first real feature
+routes required no change to the Phase 0 enforcement layer.
+
+**Verification.** `tests/test_phase1_cross_role.py` (16 tests) and
+`tests/test_phase1_cross_clinic.py` (15 tests) attack these routes directly over
+HTTP with valid tokens for the wrong role and the wrong clinic. Both suites were
+mutation-checked: reversing D-004 in `policy.py` fails exactly the two staff
+visibility tests, and removing the clinic filter from `AccessScope.query()`
+fails 12 of the 15 cross-clinic tests. A security test that cannot fail is worse
+than no test, because it is mistaken for coverage.
+
+---
+
 ## Where redaction happens
 
 **File:** `backend/app/ai/redaction.py`, function `redact_phi(text) -> str`.
@@ -199,14 +229,29 @@ patient names after exercising every route (clean).
 
 ## Latency
 
-Target: Glance View P95 ≤ 300 ms on a warm path. Not measurable yet — the view
-does not exist until Phase 2.4.
+Target: Glance View P95 ≤ 300 ms on a warm path. The Glance View does not exist
+until Phase 2.4, so this is still not measurable.
 
-Groundwork laid now: a composite index on `(patient_id, timestamp)` covers the
-timeline's hot query, and `clinic_id` is indexed on every scoped table so the
-RBAC predicate is never a table scan. Measurement method will be recorded here
-in Phase 2.4 — the number reported in the final brief will be a measured
-distribution over repeated warm requests, not a single sample or an assertion.
+Groundwork: a composite index on `(patient_id, timestamp)` covers the timeline's
+hot query, and `clinic_id` is indexed on every scoped table so the RBAC
+predicate is never a table scan. The role-based type filter is applied as a SQL
+`IN` clause on the indexed `type` column rather than in Python (D-023), so it
+narrows the scan instead of widening it.
+
+**Phase 1 reading — a floor, not a measurement.**
+`tests/test_phase1_skeleton.py` times 20 warm, in-process reads of
+`GET /patients/{id}/entries` against SQLite. Observed P95 is single-digit
+milliseconds. That number excludes the network, the browser, JSON transfer, the
+Glance View's scoring pass, and any dataset larger than seven seeded rows — so
+it is a **lower bound on real latency**, recorded so Phase 2 can see how much
+budget each feature spends as it lands on this path. It is not evidence the
+300 ms target is met, and the final brief must not quote it as though it were
+(DECISIONS.md D-027).
+
+The honest measurement needs the real Glance View, a seeded dataset of realistic
+size, and timing taken at the browser. Method will be recorded here in Phase 2.4
+and the reported figure will be a distribution over repeated warm requests, not
+a single sample.
 
 ---
 
