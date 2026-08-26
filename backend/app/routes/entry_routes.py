@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import difflib
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.core.audit_logging import log_event
 from app.core.enums import (
@@ -139,6 +141,73 @@ def _version_out(scope: AccessScope, version: Version) -> VersionOut:
     )
 
 
+def _version_conflict(
+    scope: AccessScope, entry: Entry, expected_version: int
+) -> HTTPException:
+    """The one 409 shape, used by both paths that can detect a collision.
+
+    A client should not have to tell the difference between "your version was
+    already stale when you asked" and "someone beat you to the commit by
+    milliseconds". Both mean the same thing to the person typing — reload
+    before you save — so both return the same body, current state attached, so
+    the UI can show what is about to be lost rather than just saying "retry".
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "version_conflict",
+            "message": (
+                "This note changed while you were editing it. Reload to see "
+                "the current version before saving."
+            ),
+            "expected_version": expected_version,
+            "current_version": entry.version_number,
+            "current_content": entry.content,
+            "last_edited_by": _author_name(scope, entry.author_id),
+        },
+    )
+
+
+@contextmanager
+def _appending_version(scope: AccessScope, entry_id: str, expected_version: int):
+    """Second line of defence for the version check: the race the pre-check misses.
+
+    `update_entry` reads `entry.version_number`, compares it, and only then
+    writes. Between the read and the write there is a gap, and under genuine
+    parallelism two callers can both pass the comparison while holding the same
+    starting version. The pre-check alone is therefore check-then-act, which is
+    not a lock.
+
+    What actually makes it safe is the `uq_entry_version` unique constraint on
+    `(entry_id, version_number)`: whichever transaction commits second cannot
+    write a second version 2, so the database refuses it. That refusal is the
+    real serialisation point, and the guarantee it gives is the one that matters
+    — no edit is ever silently lost.
+
+    Without this wrapper, though, the loser of that race got an unhandled
+    `IntegrityError` and a 500. A 500 tells the user nothing, carries none of
+    the current state, and looks like a crash rather than a resolution. So we
+    translate it into exactly the 409 the pre-check produces. The strategy is
+    then deterministic under real concurrency rather than only under
+    interleaving: first commit wins, every later writer is told what it is
+    about to overwrite and reloads.
+
+    Found while writing `test_concurrent_edits.py` — see DECISIONS.md D-037.
+    """
+    try:
+        yield
+    except IntegrityError:
+        scope.db.rollback()
+        # rollback expires the identity map, so this is a genuine re-read of
+        # whatever the winning transaction committed.
+        fresh = scope.db.get(Entry, entry_id)
+        if fresh is None:  # pragma: no cover — nothing in this app deletes entries
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found"
+            ) from None
+        raise _version_conflict(scope, fresh, expected_version) from None
+
+
 def _load_editable(scope: AccessScope, entry_id: str) -> Entry:
     """Fetch an entry this caller is allowed to modify, or refuse.
 
@@ -211,23 +280,10 @@ def update_entry(
     """Edit an entry. Appends a version; never mutates history."""
     entry = _load_editable(scope, entry_id)
 
+    # First line of defence: the version the client read is already behind.
+    # Cheap, and catches the overwhelmingly common case.
     if payload.expected_version != entry.version_number:
-        # 409 with the current state attached, so the client can show the user
-        # what they are about to lose rather than just saying "try again".
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error": "version_conflict",
-                "message": (
-                    "This note changed while you were editing it. Reload to see "
-                    "the current version before saving."
-                ),
-                "expected_version": payload.expected_version,
-                "current_version": entry.version_number,
-                "current_content": entry.content,
-                "last_edited_by": _author_name(scope, entry.author_id),
-            },
-        )
+        raise _version_conflict(scope, entry, payload.expected_version)
 
     try:
         content, markers = prepare_content(payload.content)
@@ -240,51 +296,52 @@ def update_entry(
         ) from exc
 
     risk_level = payload.risk_level or RiskLevel(str(entry.risk_level))
-    version = _append_version(
-        scope,
-        entry,
-        content=content,
-        title=title,
-        risk_level=risk_level,
-        change_summary=payload.change_summary or "edited",
-    )
+    with _appending_version(scope, entry.id, payload.expected_version):
+        version = _append_version(
+            scope,
+            entry,
+            content=content,
+            title=title,
+            risk_level=risk_level,
+            change_summary=payload.change_summary or "edited",
+        )
 
-    scope.db.add(
-        AuditLog(
-            actor_id=scope.user_id,
-            actor_role=scope.role,
+        scope.db.add(
+            AuditLog(
+                actor_id=scope.user_id,
+                actor_role=scope.role,
+                clinic_id=scope.clinic_id,
+                action="entry.update",
+                target_type="entry",
+                target_id=entry.id,
+                audit_metadata=json.dumps(
+                    {
+                        "version": version.version_number,
+                        "previous_version": version.version_number - 1,
+                        "content_length": len(content),
+                        "risk_level": str(risk_level),
+                        "injection_markers": markers + title_markers,
+                    }
+                ),
+            )
+        )
+
+        # Existing highlights on this entry are now anchored to an older
+        # version. They are marked stale by comparison rather than re-anchored
+        # (D-030), and new suggestions are generated against the new text.
+        highlights.refresh_entry_highlights(scope.db, entry)
+        record_interaction(
+            scope.db,
+            user_id=scope.user_id,
+            user_role=scope.role,
             clinic_id=scope.clinic_id,
-            action="entry.update",
+            action=InteractionAction.EDIT,
             target_type="entry",
             target_id=entry.id,
-            audit_metadata=json.dumps(
-                {
-                    "version": version.version_number,
-                    "previous_version": version.version_number - 1,
-                    "content_length": len(content),
-                    "risk_level": str(risk_level),
-                    "injection_markers": markers + title_markers,
-                }
-            ),
+            tags=features.entry_level_tags(entry.type, risk_level)
+            + features.tag_span(content)[0],
         )
-    )
-
-    # Existing highlights on this entry are now anchored to an older version.
-    # They are marked stale by comparison rather than re-anchored (D-030), and
-    # new suggestions are generated against the new text.
-    highlights.refresh_entry_highlights(scope.db, entry)
-    record_interaction(
-        scope.db,
-        user_id=scope.user_id,
-        user_role=scope.role,
-        clinic_id=scope.clinic_id,
-        action=InteractionAction.EDIT,
-        target_type="entry",
-        target_id=entry.id,
-        tags=features.entry_level_tags(entry.type, risk_level)
-        + features.tag_span(content)[0],
-    )
-    scope.db.commit()
+        scope.db.commit()
     scope.db.refresh(entry)
 
     log_event(
@@ -408,36 +465,40 @@ def revert_entry(
             detail="that version is already current",
         )
 
-    version = _append_version(
-        scope,
-        entry,
-        content=target.content_snapshot,
-        title=target.title_snapshot,
-        risk_level=RiskLevel(str(target.risk_level_snapshot or RiskLevel.NONE)),
-        change_summary=payload.change_summary
-        or f"reverted to v{payload.to_version}",
-        reverted_from=payload.to_version,
-    )
-
-    scope.db.add(
-        AuditLog(
-            actor_id=scope.user_id,
-            actor_role=scope.role,
-            clinic_id=scope.clinic_id,
-            action="entry.revert",
-            target_type="entry",
-            target_id=entry.id,
-            audit_metadata=json.dumps(
-                {
-                    "version": version.version_number,
-                    "reverted_from_version": payload.to_version,
-                    "content_length": len(target.content_snapshot or ""),
-                }
-            ),
+    # A revert appends a version exactly as an edit does, so it races exactly
+    # as an edit does — two clinicians reverting at once, or a revert landing
+    # alongside an edit. Same guard, same 409.
+    with _appending_version(scope, entry.id, entry.version_number):
+        version = _append_version(
+            scope,
+            entry,
+            content=target.content_snapshot,
+            title=target.title_snapshot,
+            risk_level=RiskLevel(str(target.risk_level_snapshot or RiskLevel.NONE)),
+            change_summary=payload.change_summary
+            or f"reverted to v{payload.to_version}",
+            reverted_from=payload.to_version,
         )
-    )
-    highlights.refresh_entry_highlights(scope.db, entry)
-    scope.db.commit()
+
+        scope.db.add(
+            AuditLog(
+                actor_id=scope.user_id,
+                actor_role=scope.role,
+                clinic_id=scope.clinic_id,
+                action="entry.revert",
+                target_type="entry",
+                target_id=entry.id,
+                audit_metadata=json.dumps(
+                    {
+                        "version": version.version_number,
+                        "reverted_from_version": payload.to_version,
+                        "content_length": len(target.content_snapshot or ""),
+                    }
+                ),
+            )
+        )
+        highlights.refresh_entry_highlights(scope.db, entry)
+        scope.db.commit()
     scope.db.refresh(entry)
 
     log_event(
