@@ -362,6 +362,34 @@ class FeatureWeight(Base):
     )
 
 
+class PatientView(Base):
+    """When each user last opened each patient — the state behind "what's
+    changed since you were last here".
+
+    Two timestamps rather than one, deliberately. `last_viewed_at` moves on
+    every page load; if the Glance View compared against it, the act of reading
+    the "what's new" group would immediately clear it, and a refresh — or a
+    second monitor — would lose the news. `previous_viewed_at` is the stable
+    comparison point and only rolls forward when a genuinely new visit begins
+    (see VIEW_SESSION_GAP in services/glance.py). See DECISIONS.md D-033.
+    """
+
+    __tablename__ = "patient_views"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    clinic_id: Mapped[str] = mapped_column(ForeignKey("clinics.id"), nullable=False, index=True)
+
+    last_viewed_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    previous_viewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    view_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "patient_id", name="uq_user_patient_view"),
+    )
+
+
 class AuditLog(Base):
     """Who changed what, when. Metadata only — never note content."""
 
