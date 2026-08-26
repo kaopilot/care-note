@@ -28,12 +28,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.audit_logging import log_event
-from app.core.enums import AI_SCRIBED_TYPES, EntryType, RiskLevel, Role
+from app.core.enums import AI_SCRIBED_TYPES, EntryType, InteractionAction, RiskLevel, Role
 from app.core.provenance import entry_pointer
 from app.core.sanitization import ContentTooLongError, prepare_content
-from app.models import AuditLog, Entry, Patient, Version
+from app.models import AIScribedNote, AuditLog, Comment, Entry, Highlight, Patient, User, Version
+from app.routes.schemas import EntryOut, entry_out
 from app.security import policy
 from app.security.rbac import AccessScope, require_access
+from app.services import features, highlights
+from app.services.interactions import record_interaction
 
 router = APIRouter(tags=["patients"])
 
@@ -51,30 +54,6 @@ class PatientOut(BaseModel):
     clinic_id: str
 
 
-class EntryOut(BaseModel):
-    """One timeline entry.
-
-    Every field the shared context requires on a timeline entry is present and
-    non-optional in the response: author_role, author_id, timestamp, type,
-    provenance_pointer. `is_ai_scribed` is derived rather than stored so the
-    client cannot disagree with the server about which notes are machine
-    output — the visual distinction the brief requires is driven from here.
-    """
-
-    id: str
-    patient_id: str
-    author_role: str
-    author_id: str
-    timestamp: datetime
-    type: str
-    title: str | None
-    content: str
-    risk_level: str
-    provenance_pointer: str | None
-    version_number: int
-    is_ai_scribed: bool
-
-
 class EntryCreate(BaseModel):
     type: EntryType
     content: str = Field(min_length=1)
@@ -83,20 +62,77 @@ class EntryCreate(BaseModel):
 
 
 def _to_out(entry: Entry) -> EntryOut:
-    return EntryOut(
-        id=entry.id,
-        patient_id=entry.patient_id,
-        author_role=str(entry.author_role),
-        author_id=entry.author_id,
-        timestamp=entry.timestamp,
-        type=str(entry.type),
-        title=entry.title,
-        content=entry.content,
-        risk_level=str(entry.risk_level),
-        provenance_pointer=entry.provenance_pointer,
-        version_number=entry.version_number,
-        is_ai_scribed=EntryType(entry.type) in AI_SCRIBED_TYPES,
-    )
+    """Minimal serialisation, for the single-entry routes.
+
+    The timeline route uses `enrich_entries` instead, which batches the counts
+    and joins rather than issuing them per row.
+    """
+    return entry_out(entry)
+
+
+def enrich_entries(scope: AccessScope, entries: list[Entry]) -> list[EntryOut]:
+    """Serialise a timeline with its metadata, in a fixed number of queries.
+
+    Author names, AI provenance, comment counts and highlight counts are all
+    things the timeline must show. Fetching them per entry is the obvious
+    implementation and turns a 20-entry chart into 80 round trips; four grouped
+    queries keep the shape flat regardless of chart size.
+    """
+    if not entries:
+        return []
+
+    entry_ids = [entry.id for entry in entries]
+    names = {
+        user.id: user.name
+        for user in scope.db.query(User).filter(User.clinic_id == scope.clinic_id).all()
+    }
+    ai_notes = {
+        note.entry_id: note
+        for note in scope.query(AIScribedNote)
+        .filter(AIScribedNote.entry_id.in_(entry_ids))
+        .all()
+    }
+
+    comment_totals: dict[str, int] = {}
+    open_comments: dict[str, int] = {}
+    for comment in scope.query(Comment).filter(Comment.entry_id.in_(entry_ids)).all():
+        # A patient must not learn that internal discussion exists, let alone
+        # how much of it. Counting it for them would leak the fact of the
+        # conversation even though the bodies stay hidden.
+        if comment.is_internal and not policy.can_view_internal_comments(scope.role):
+            continue
+        comment_totals[comment.entry_id] = comment_totals.get(comment.entry_id, 0) + 1
+        if str(comment.status) == "open":
+            open_comments[comment.entry_id] = open_comments.get(comment.entry_id, 0) + 1
+
+    highlight_totals: dict[str, int] = {}
+    if policy.can_view_internal_comments(scope.role):
+        for highlight in (
+            scope.query(Highlight).filter(Highlight.entry_id.in_(entry_ids)).all()
+        ):
+            if str(highlight.status) == "rejected":
+                continue
+            highlight_totals[highlight.entry_id] = (
+                highlight_totals.get(highlight.entry_id, 0) + 1
+            )
+
+    return [
+        entry_out(
+            entry,
+            author_name=(
+                "Care Note AI" if str(entry.author_role) == "system"
+                else names.get(entry.author_id)
+            ),
+            ai_note=ai_notes.get(entry.id),
+            comment_count=comment_totals.get(entry.id, 0),
+            open_comment_count=open_comments.get(entry.id, 0),
+            highlight_count=highlight_totals.get(entry.id, 0),
+            # Drives whether the client offers an edit affordance. The server
+            # refuses the write regardless of what the client decides to draw.
+            editable_by_me=policy.can_write_type(scope.role, EntryType(entry.type)),
+        )
+        for entry in entries
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +217,7 @@ def list_entries(
         clinic_id=scope.clinic_id,
         metadata={"role": str(scope.role), "returned": len(entries)},
     )
-    return [_to_out(e) for e in entries]
+    return enrich_entries(scope, entries)
 
 
 @router.get("/entries/{entry_id}", response_model=EntryOut)
@@ -301,6 +337,23 @@ def create_entry(
     )
     scope.db.commit()
     scope.db.refresh(entry)
+
+    # Score the new entry now, not when the Glance View is next opened. The
+    # Glance View has a 300ms P95 budget and this is the work that would
+    # otherwise land inside it.
+    highlights.refresh_entry_highlights(scope.db, entry)
+    record_interaction(
+        scope.db,
+        user_id=scope.user_id,
+        user_role=scope.role,
+        clinic_id=scope.clinic_id,
+        action=InteractionAction.EDIT,
+        target_type="entry",
+        target_id=entry.id,
+        tags=features.entry_level_tags(entry.type, entry.risk_level)
+        + features.tag_span(content)[0],
+    )
+    scope.db.commit()
 
     log_event(
         actor_id=scope.user_id,
