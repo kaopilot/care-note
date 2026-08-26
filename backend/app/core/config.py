@@ -34,5 +34,11 @@ class Settings:
     # matches a PHI pattern after redaction, rather than sending it anyway.
     fail_closed_on_phi: bool = True
 
+    # Demo affordance only. The scribe pipeline is synchronous, so with a
+    # fast offline summariser the client's "processing" state would flash by
+    # too quickly to see. Set to e.g. 1200 when recording the demo; 0
+    # everywhere else, including tests.
+    scribe_delay_ms: int = int(os.getenv("CARENOTE_SCRIBE_DELAY_MS", "0"))
+
 
 settings = Settings()
