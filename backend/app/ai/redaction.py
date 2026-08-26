@@ -140,8 +140,17 @@ class _Redactor:
         key = f"{category}:{value.strip().lower()}"
         if key in self._seen:
             return self._seen[key]
-        self._counters[category] = self._counters.get(category, 0) + 1
-        token = PLACEHOLDERS[category].format(n=self._counters[category])
+        # Counters are keyed on the TOKEN TEMPLATE, not the category, because
+        # two categories share one template: `nric` and `mrn` both render as
+        # `[ID_{n}]`. Counting per category made the first NRIC and the first
+        # MRN in a document both come out as `[ID_1]` — two different
+        # identifiers collapsed into one, which would tell a downstream model
+        # that a record number and an NRIC were the same thing. Found while
+        # building the Phase 2 scribe pipeline against a transcript containing
+        # both; see DECISIONS.md D-034.
+        template = PLACEHOLDERS[category]
+        self._counters[template] = self._counters.get(template, 0) + 1
+        token = template.format(n=self._counters[template])
         self._seen[key] = token
         self.placeholders[token] = category
         return token
