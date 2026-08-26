@@ -29,9 +29,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from app.core.db import Base, SessionLocal, engine
-from app.core.enums import EntryType, RiskLevel, Role
-from app.core.provenance import entry_pointer
-from app.models import Clinic, Entry, Patient, User, Version
+from app.core.enums import EntryType, InteractionType, RiskLevel, Role
+from app.core.provenance import entry_pointer, session_pointer
+from app.models import AIScribedNote, Clinic, Entry, Patient, User, Version
 from app.security.auth import hash_password
 
 # Seed password for every demo account. Dev fixture only — see README.
@@ -55,6 +55,7 @@ def _add_entry(
     content: str,
     days_ago: int,
     risk: RiskLevel = RiskLevel.NONE,
+    provenance: str | None = None,
 ) -> Entry:
     """Seed one entry plus its version-1 snapshot.
 
@@ -76,8 +77,9 @@ def _add_entry(
         risk_level=risk,
         version_number=1,
         # A manually authored entry is its own provenance: it was written here,
-        # not derived from a transcript or an AI session.
-        provenance_pointer=entry_pointer(entry_id),
+        # not derived from a transcript or an AI session. An AI-scribed entry
+        # passes an explicit pointer back to the session it came from.
+        provenance_pointer=provenance or entry_pointer(entry_id),
     )
     db.add(entry)
     db.flush()
@@ -207,6 +209,47 @@ def seed(reset: bool = False) -> None:
             days_ago=1,
         )
 
+        # -- one AI-scribed entry ---------------------------------------
+        # Seeded directly rather than generated, because the scribe pipeline is
+        # Phase 2.2 and this is a Phase 1 fixture. It exists so the walking
+        # skeleton can demonstrate the requirement that AI-scribed notes be
+        # visually and structurally distinct from manual ones - without it the
+        # frontend's AI-SCRIBED treatment never renders and the distinction is
+        # asserted in tests but never seen.
+        #
+        # The content below is written as ALREADY-REDACTED output: no names, no
+        # identifiers, no phone numbers. A seed row bypasses redact_phi() by
+        # construction, so seeding text that would have failed redaction would
+        # plant a misleading example for every later phase to copy.
+        ai_session_id = "sess-a1-consult-0001"
+        ai_entry = _add_entry(
+            db, entry_id="entry-a1-ai", patient_id="patient-a1", clinic_id="clinic-a",
+            author_id="system", author_role=Role.SYSTEM,
+            entry_type=EntryType.AI_DOCTOR_CONSULT_SUMMARY,
+            title="Consult summary (AI-scribed)",
+            content=(
+                "Glycaemic control reviewed. Patient reports inconsistent evening "
+                "dosing due to work schedule. New paraesthesia in both feet over "
+                "roughly two weeks - neuropathy screen discussed. Agreed to repeat "
+                "ACR and review titration in three months."
+            ),
+            days_ago=3,
+            # Provenance points at the originating session, not at itself.
+            provenance=session_pointer(ai_session_id),
+        )
+        db.add(
+            AIScribedNote(
+                entry_id=ai_entry.id,
+                clinic_id="clinic-a",
+                session_id=ai_session_id,
+                interaction_type=InteractionType.DOCTOR_PATIENT_CONSULT,
+                model_used="stub-offline-v0",
+                redaction_applied=True,
+                redaction_count=2,
+                confidence=0.82,
+            )
+        )
+
         # -- one entry on patient-a2 and one in clinic B ----------------
         # patient-a2 exists so "list patients in my clinic" returns more than
         # one row; clinic B has content so cross-clinic reads have something
@@ -232,7 +275,8 @@ def seed(reset: bool = False) -> None:
         )
 
         db.commit()
-        print("Seeded 2 clinics, 4 patients, 8 users (one per role per clinic), 6 entries.")
+        print("Seeded 2 clinics, 4 patients, 8 users (one per role per clinic), "
+              "7 entries (1 AI-scribed).")
         print(f"Login with any username above / password: {DEMO_PASSWORD}")
         print("Usernames: clinician_a staff_a admin_a patient_a "
               "clinician_b staff_b admin_b patient_b")
