@@ -579,3 +579,127 @@ dependency has to earn its line in `ATTRIBUTION.txt`.
   nothing writes to that table yet. `InteractionLog` rows *are* being written
   from Phase 2 onward, so Phase 4 starts with real behavioural history rather
   than an empty table.
+
+---
+
+## Phase 3 — Required automated tests (2026-08-26)
+
+The four files the brief names by name now exist, at 83 tests between them, on
+top of the 173 already in the repo. Phase 3 was meant to be a write-tests-
+against-what-exists phase with no product change. It found one real defect, and
+the entry recording it is the substantive part of this section.
+
+### D-037 · The optimistic lock needed a second line of defence
+
+**Found by writing `test_concurrent_edits.py`.** The Phase 2 version check reads
+`entry.version_number`, compares it to `expected_version`, and only then writes.
+That is check-then-act, not a lock: between the read and the commit there is a
+window in which a second caller can pass the same comparison holding the same
+starting version.
+
+What actually made the system safe was already there — the `uq_entry_version`
+unique constraint on `(entry_id, version_number)` means the second transaction
+cannot write a second version 2, so **no edit was ever silently lost**. The
+guarantee the brief asks for held. What did not hold was the contract around it:
+the loser surfaced an unhandled `IntegrityError` as a **500**. A 500 tells the
+user nothing, carries none of the current state, and looks like a crash rather
+than a resolution — so "deterministic resolution strategy" was true of the data
+and false of the API.
+
+`_appending_version` in `entry_routes.py` now wraps the write region and
+translates that constraint violation into exactly the 409 the pre-check
+produces, via a shared `_version_conflict` body. A client cannot distinguish
+"your version was already stale when you asked" from "someone beat you to the
+commit by milliseconds", which is correct — both mean *reload before you save*.
+Applied to revert as well as update, because revert appends a version by the
+same path and races the same way.
+
+**Why the interleaved tests missed it.** Every same-section test written first
+was `read → read → write → write` against one shared session, which is
+deterministic and proves the lost-update property exactly — but a single session
+serialises everything through itself, so the racy window never opens. Only real
+threads against a file-backed database with a session per request exposed it.
+Both styles are kept, and the file says why: the interleaved tests are the
+specification, the threaded ones are the thing that finds what the
+specification forgot to say.
+
+**Cost / remaining gap:** SQLite serialises writers with a database-level lock,
+so under heavier contention a writer can time out with `OperationalError`
+("database is locked") rather than reaching the constraint at all. That is
+deliberately *not* translated into a 409 — a lock timeout is an infrastructure
+failure, and reporting it as "someone else edited this" would be a lie about
+what happened. Postgres with row-level locking removes the distinction; it is
+noted rather than fixed because the prototype's storage decision (D-001) is
+SQLite.
+
+### D-038 · Concurrent reverts may both legitimately succeed
+
+Not a defect, but non-obvious enough to record, because the first draft of the
+test asserted otherwise and was flaky as a result.
+
+`revert` takes a `to_version` — a *target*, not a base — and no
+`expected_version`. So a second reverter that reads after the first has
+committed is not stale: it performs a valid sequential revert to the same
+target and returns 200. Only a reverter that read the same base and lost the
+commit race gets a 409.
+
+Both outcomes are correct, so the number of successes under parallel reverts is
+genuinely non-deterministic. `test_parallel_reverts_never_crash_or_fork_the_history`
+therefore asserts the invariants that do hold — no crash, contiguous version
+chain with no duplicates or gaps, content lands on the target regardless of how
+many reverts landed — rather than a success count that would make the test
+flaky rather than strict.
+
+Adding `expected_version` to revert would make it deterministic and was
+considered. Rejected: reverting is a recovery action, usually taken *because*
+the record is in a state the user did not expect, and requiring them to first
+prove they know what that state is adds a failure mode to the operation people
+reach for when something has already gone wrong. Reverting twice to v1 yields
+v1 either way.
+
+### Testing decisions
+
+**Mutation checking extended to all four files.** Each new suite was verified to
+fail when the behaviour it asserts is deliberately broken — eight mutations,
+tabulated in `README.md`. The two that matter most: disabling the D-037 guard
+fails 3 tests, and switching to last-write-wins fails 4. Coverage that cannot
+fail is not coverage.
+
+**Provenance is asserted at two layers on purpose.** `resolve()` is called
+directly for *every* highlight in the database, so a highlight on an entry type
+a given role would be refused is still checked; and the API route is asserted
+separately, because the route adds the role and clinic checks that make a
+pointer a reference rather than an authorisation. Neither layer alone covers
+the requirement.
+
+**The parallel fixture is local to `test_concurrent_edits.py`**, not added to
+`conftest.py`. It needs a file-backed engine and a session per request, which is
+different enough from the shared in-memory single-session fixture that folding
+the two together would complicate every other test in the suite to serve four.
+Same reasoning as D-028.
+
+**One test asserts against `EntryOut` not having a field.**
+`test_clinic_id_is_taken_from_the_token_not_the_request` checks the stored row
+rather than the response, because the wire format deliberately omits
+`clinic_id` — the API cannot confirm the property, only the database can.
+
+### Deferred / cut in Phase 3
+* **`OperationalError` translation** under SQLite write-lock contention — see
+  D-037. Deliberately left as a crash-with-a-real-cause rather than mislabelled
+  as a conflict.
+* **A concurrency test for comments.** Comments are append-only with no version
+  field, so there is no lost-update hazard to demonstrate; two people commenting
+  at once simply produces two comments.
+* **Load/latency testing under concurrency.** The P95 figure in
+  `ARCHITECTURE.md` is measured on a warm single-user path. What concurrent
+  read latency looks like is unmeasured and is stated as unmeasured rather than
+  extrapolated.
+
+### Open questions carried into Phase 4
+* The three open questions from Phase 2 are all still open and still deliberate
+  (`patient_summary` authorship, `list_entries` payload size, the empty
+  `FeatureWeight` table). Phase 4 closes the last of them by construction.
+* `InteractionLog` rows have been accumulating since Phase 2 but nothing has
+  ever read them. Phase 4 is the first consumer, so the first thing it should
+  do is check that the tags being written are actually the shape the scorer
+  wants — a schema that was never read back is a schema that was never tested.

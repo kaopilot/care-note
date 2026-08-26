@@ -99,23 +99,58 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 173 tests
+pytest tests/ -v                  # from the repository root — 256 tests
+```
+
+256 tests, all passing, no API key or network required. Roughly 20 seconds.
+
+To run just the four files the brief names:
+
+```bash
+pytest tests/test_rbac_scope.py -v            # role + clinic enforcement
+pytest tests/test_revision_history.py -v      # versions, revert, audit trail
+pytest tests/test_highlight_provenance.py -v  # every pointer resolves
+pytest tests/test_concurrent_edits.py -v      # parallel edits, deterministic conflicts
+```
+
+Or by area:
+
+```bash
 pytest tests/ -v -k rbac          # the Phase 0 enforcement-pattern tests
 pytest tests/ -v -k phase1        # the walking-skeleton proofs
 pytest tests/ -v -k phase2        # the Phase 2 product-surface tests
 pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 ```
 
-173 tests, all passing, no API key or network required.
+⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
+fixture to prove that no prompt text reaches the logs; disabling the logging
+plugin errors that test rather than skipping it.
 
-The two Phase 1 access-control suites were **mutation-checked** — deliberately
-broken to confirm they can fail. Reversing D-004 in `policy.py` fails exactly
-the two staff-visibility tests; removing the clinic filter from
-`AccessScope.query()` fails 12 of the 15 cross-clinic tests. A security test
-that cannot fail is worse than no test, because it gets mistaken for coverage.
+A captured run is saved at [`docs/PHASE3_TEST_EVIDENCE.md`](docs/PHASE3_TEST_EVIDENCE.md).
+
+### Mutation checking
+
+Access-control and history tests were **deliberately broken to confirm they can
+fail**. A security test that cannot fail is worse than no test, because it gets
+mistaken for coverage.
+
+| Mutation | Tests that fail |
+|---|---|
+| Reverse D-004 (let staff view `clinician_sections`) | 4 in `test_rbac_scope.py` |
+| Remove the clinic filter from `AccessScope.query()` | 15 in `test_rbac_scope.py`, 12 in the Phase 1 suites |
+| Make revert delete later `Version` rows | 4 in `test_revision_history.py` |
+| `resolve()` returns `{}` instead of raising on a dangling pointer | 1 in `test_highlight_provenance.py` |
+| Highlights re-anchor on edit instead of going stale | 1 in `test_highlight_provenance.py` |
+| Drop the span fragment from highlight pointers | 3 in `test_highlight_provenance.py` |
+| Disable the D-037 conflict guard | 3 in `test_concurrent_edits.py` |
+| Last-write-wins instead of optimistic locking | 4 in `test_concurrent_edits.py` |
 
 | File | Covers |
 |---|---|
+| `tests/test_rbac_scope.py` | **Required.** Cross-role writes, D-004 staff visibility, patient isolation, cross-clinic refusal, verbatim payload round-trip |
+| `tests/test_revision_history.py` | **Required.** Version increments, revert-by-append, audit trail carries metadata only |
+| `tests/test_highlight_provenance.py` | **Required.** Every pointer resolves to the exact span the card displayed |
+| `tests/test_concurrent_edits.py` | **Required.** Different-section and same-section collisions, interleaved and genuinely threaded |
 | `tests/test_rbac_pattern.py` | Role and clinic enforcement, server-side, via HTTP |
 | `tests/test_redaction.py` | PHI detection, consistency, idempotence, and stated gaps |
 | `tests/test_llm_chokepoint.py` | That the redaction boundary cannot be bypassed |
@@ -126,10 +161,19 @@ that cannot fail is worse than no test, because it gets mistaken for coverage.
 | `tests/test_sanitization.py` | Content safety; scans the frontend for raw-HTML sinks |
 | `tests/test_phase2_core.py` | Scribe redaction, Glance View contents, staleness, conflict rule |
 
-The four test files named in the brief (`test_rbac_scope.py`,
-`test_revision_history.py`, `test_highlight_provenance.py`,
-`test_concurrent_edits.py`) arrive in Phase 3, once the features they test
-exist.
+### What the required tests found
+
+`test_concurrent_edits.py` found a real defect. The optimistic-lock check reads
+`version_number`, compares it, and only then writes — check-then-act, not a
+lock. Under genuine parallelism two callers both passed the comparison, and the
+`uq_entry_version` constraint refused the second, which meant **no edit was ever
+lost**. But that refusal surfaced as an unhandled `IntegrityError` and a 500,
+which tells the user nothing and carries none of the state they need to recover.
+
+Interleaved tests reported everything as correct; only real threads opened the
+window. Fixed in `_appending_version` (`backend/app/routes/entry_routes.py`) so
+both detection paths return the same 409, and pinned by
+`test_the_loser_of_a_real_race_gets_a_conflict_not_a_crash`. Recorded as D-037.
 
 ---
 
