@@ -1,53 +1,39 @@
-import { useCallback, useEffect, useState } from 'react'
-
 /**
- * Phase 1 walking skeleton: log in, pick a patient, read the timeline.
+ * Care Note — application shell.
  *
- * Deliberately ugly. The point of this phase is proving the plumbing, not the
- * product — the design pass belongs in Phase 6, on the Glance View.
+ * Holds three things and delegates the rest: who is signed in, which patient is
+ * open, and where a provenance click should land.
  *
- * Two things here are load-bearing rather than cosmetic:
+ * Provenance click-through is the piece worth reading. Clicking a highlight
+ * sets `emphasis` to the entry id plus the character span the highlight was
+ * drawn from, scrolls that entry into view, and the entry renders its content
+ * with that exact range marked. Not "jumps to the note" — jumps to the words.
+ * That is the difference between a citation and a gesture at one.
  *
- * 1. No token is ever held in JavaScript. Login sets an httpOnly cookie
- *    server-side; every fetch below sends `credentials: 'include'` and the
- *    browser attaches it. The response body's `access_token` is deliberately
- *    ignored — reading it into state would be the first step toward
- *    localStorage, which D-016 rules out. Session is restored across refresh by
- *    asking GET /auth/me, not by remembering anything.
- *
- * 2. Note content is rendered as a text child, never as HTML. React escapes it,
- *    so a stored `<script>` in a note body is inert. This file contains no
- *    raw-HTML sink of any kind, and
- *    tests/test_sanitization.py::test_frontend_never_renders_raw_html scans it
- *    and fails the build if one appears (D-015). Note that the scan is a plain
- *    text search, so even naming the forbidden props in a comment trips it —
- *    which is the correct level of paranoia for this control.
- *
- * What the UI shows is NOT the security boundary. The server has already
- * filtered the timeline to what this role may read; this page just draws
- * whatever came back. Hiding things client-side would be theatre.
+ * What this page draws is never the access boundary. The server has already
+ * filtered the timeline, the Glance View and the comment threads to what this
+ * role may read; hiding things here as well would be theatre, and the tests
+ * that matter call the API directly.
  */
 
-const ROLE_STYLES = {
-  clinician: 'border-l-4 border-l-indigo-500',
-  staff: 'border-l-4 border-l-emerald-500',
-  patient: 'border-l-4 border-l-amber-500',
-  system: 'border-l-4 border-l-slate-400 border-dashed bg-slate-50',
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Api, ApiError } from './lib/api'
+import GlanceView from './components/GlanceView'
+import PatientHome from './components/PatientHome'
+import Timeline from './components/Timeline'
+import { Button, Chip } from './components/Primitives'
+import { roleLabel } from './lib/format'
+
+const WRITABLE_TYPE = {
+  staff: { type: 'staff_note', label: 'staff note' },
+  clinician: { type: 'clinician_section', label: 'clinician section' },
+  patient: { type: 'patient_note', label: 'note for your care team' },
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-  })
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}))
-    const error = new Error(detail.detail || `HTTP ${response.status}`)
-    error.status = response.status
-    throw error
-  }
-  return response.status === 204 ? null : response.json()
+const SCRIBE_LABEL = {
+  doctor_patient_consult: 'Doctor consult',
+  nurse_patient_consult: 'Nurse consult',
+  ai_patient_session: 'AI patient session',
 }
 
 function LoginForm({ onLoggedIn }) {
@@ -56,17 +42,15 @@ function LoginForm({ onLoggedIn }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
-  async function submit() {
+  async function submit(event) {
+    event.preventDefault()
     setBusy(true)
     setError(null)
     try {
       // The response body carries an access_token for non-browser clients.
-      // We intentionally do not touch it — the cookie is our transport.
-      await api('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ username, password }),
-      })
-      onLoggedIn(await api('/auth/me'))
+      // This client ignores it — the httpOnly cookie is the transport (D-016).
+      await Api.login(username, password)
+      onLoggedIn(await Api.me())
     } catch (err) {
       setError(err.message)
     } finally {
@@ -75,184 +59,268 @@ function LoginForm({ onLoggedIn }) {
   }
 
   return (
-    <div className="max-w-sm">
-      <h2 className="text-sm font-medium uppercase tracking-wide text-slate-500">Sign in</h2>
+    <form
+      onSubmit={submit}
+      className="mx-auto mt-10 max-w-sm rounded-lg border border-slate-300 bg-white p-5"
+    >
+      <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+        Sign in
+      </h2>
       <input
-        className="mt-2 w-full border border-slate-300 px-2 py-1 text-sm"
+        className="mt-3 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
         value={username}
-        onChange={(e) => setUsername(e.target.value)}
+        onChange={(event) => setUsername(event.target.value)}
         placeholder="username"
+        autoComplete="username"
       />
       <input
-        className="mt-2 w-full border border-slate-300 px-2 py-1 text-sm"
+        className="mt-2 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
         type="password"
         value={password}
-        onChange={(e) => setPassword(e.target.value)}
+        onChange={(event) => setPassword(event.target.value)}
         placeholder="password"
+        autoComplete="current-password"
       />
-      <button
-        className="mt-2 border border-slate-800 bg-slate-800 px-3 py-1 text-sm text-white disabled:opacity-50"
-        onClick={submit}
-        disabled={busy}
-      >
+      <Button variant="primary" className="mt-3 w-full py-1.5" disabled={busy}>
         {busy ? 'Signing in…' : 'Sign in'}
-      </button>
+      </Button>
       {error && <p className="mt-2 text-sm text-rose-700">{error}</p>}
-      <p className="mt-3 text-xs text-slate-500">
-        Seeded accounts: clinician_a · staff_a · admin_a · patient_a · and the same four with
-        _b. Password carenote-demo. All data synthetic.
+      <p className="mt-3 text-xs leading-relaxed text-slate-500">
+        Seeded accounts: clinician_a · staff_a · admin_a · patient_a, and the same four
+        with _b for the second clinic. Password carenote-demo. All data is synthetic.
       </p>
-    </div>
+    </form>
   )
 }
 
-function Entry({ entry }) {
-  const accent = ROLE_STYLES[entry.author_role] || 'border-l-4 border-l-slate-300'
-  return (
-    <li className={`${accent} mb-2 bg-white p-3`}>
-      <div className="flex flex-wrap items-baseline gap-2 text-xs text-slate-500">
-        <span className="font-mono">{entry.type}</span>
-        <span>·</span>
-        <span>{entry.author_role}</span>
-        <span>·</span>
-        <span>{new Date(entry.timestamp).toLocaleString()}</span>
-        {entry.risk_level !== 'none' && (
-          <span className="bg-rose-100 px-1 text-rose-800">risk: {entry.risk_level}</span>
-        )}
-        {entry.is_ai_scribed && (
-          <span className="bg-slate-200 px-1 font-medium text-slate-700">AI-SCRIBED</span>
-        )}
-      </div>
-      {entry.title && <div className="mt-1 text-sm font-semibold">{entry.title}</div>}
-      {/* Text child, not HTML. React escapes this. See D-015. */}
-      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{entry.content}</p>
-      <div className="mt-1 font-mono text-[10px] text-slate-400">
-        {entry.provenance_pointer} · v{entry.version_number}
-      </div>
-    </li>
-  )
-}
-
-function Timeline({ session, onSignOut }) {
+function Workspace({ session, onSignOut }) {
   const [patients, setPatients] = useState([])
   const [selected, setSelected] = useState(null)
   const [entries, setEntries] = useState([])
-  const [error, setError] = useState(null)
+  const [glance, setGlance] = useState(null)
+  const [care, setCare] = useState(null)
+  const [timing, setTiming] = useState(null)
+  const [users, setUsers] = useState([])
+  const [emphasis, setEmphasis] = useState(null)
+  const [processing, setProcessing] = useState(null)
   const [draft, setDraft] = useState('')
-  const [loadMs, setLoadMs] = useState(null)
+  const [error, setError] = useState(null)
+  const entryRefs = useRef({})
+
+  const isPatient = session.role === 'patient'
+  const isClinical = ['staff', 'clinician', 'admin'].includes(session.role)
+  const writable = WRITABLE_TYPE[session.role]
 
   useEffect(() => {
-    api('/patients')
+    Api.patients()
       .then((rows) => {
         setPatients(rows)
         if (rows.length) setSelected(rows[0].id)
       })
       .catch((err) => setError(err.message))
-  }, [])
+    if (isClinical) Api.clinicUsers().then(setUsers).catch(() => setUsers([]))
+  }, [isClinical])
 
-  const loadEntries = useCallback((patientId) => {
-    const started = performance.now()
-    api(`/patients/${patientId}/entries`)
-      .then((rows) => {
-        setEntries(rows)
-        setLoadMs(Math.round(performance.now() - started))
+  const load = useCallback(
+    async (patientId) => {
+      if (!patientId) return
+      try {
+        if (isPatient) {
+          const { data, clientMs, serverMs } = await Api.myCare(patientId)
+          setCare(data)
+          setTiming({ clientMs, serverMs })
+        } else {
+          // Glance first: it is the surface with a latency budget, and timing
+          // it alongside the timeline fetch would measure the wrong thing.
+          const { data, clientMs, serverMs } = await Api.glance(patientId)
+          setGlance(data)
+          setTiming({ clientMs, serverMs })
+          // The patient view does not render a timeline, so it does not pay for
+          // one. Fetching entries there would be a second round trip whose
+          // result is thrown away on the view most likely to be opened on a
+          // phone, on mobile data.
+          setEntries(await Api.entries(patientId))
+        }
         setError(null)
-      })
-      .catch((err) => {
-        setEntries([])
+      } catch (err) {
         setError(err.message)
-      })
-  }, [])
+      }
+    },
+    [isPatient]
+  )
 
   useEffect(() => {
-    if (selected) loadEntries(selected)
-  }, [selected, loadEntries])
+    if (selected) load(selected)
+  }, [selected, load])
 
-  // Which type this role is allowed to author. Mirrors policy.WRITABLE_TYPES;
-  // the server refuses anything else regardless of what is sent from here.
-  const writableType = {
-    staff: 'staff_note',
-    clinician: 'clinician_section',
-    patient: 'patient_note',
-  }[session.role]
+  const registerRef = useCallback(
+    (entryId) => (element) => {
+      entryRefs.current[entryId] = element
+    },
+    []
+  )
+
+  /** Land on the words, not just the note. */
+  const jumpTo = useCallback((entryId, highlight) => {
+    setEmphasis(
+      highlight
+        ? { entryId, start: highlight.span_start, end: highlight.span_end }
+        : { entryId, start: 0, end: 0 }
+    )
+    const element = entryRefs.current[entryId]
+    if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
 
   async function addEntry() {
+    if (!draft.trim() || !writable) return
     try {
-      await api(`/patients/${selected}/entries`, {
-        method: 'POST',
-        body: JSON.stringify({ type: writableType, content: draft }),
-      })
+      await Api.createEntry(selected, { type: writable.type, content: draft })
       setDraft('')
-      loadEntries(selected)
+      await load(selected)
     } catch (err) {
       setError(err.message)
     }
   }
 
+  async function runScribe(interactionType) {
+    setProcessing(`${SCRIBE_LABEL[interactionType]} — generating summary`)
+    setError(null)
+    try {
+      await Api.runScribe(selected, interactionType)
+      await load(selected)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    } finally {
+      setProcessing(null)
+    }
+  }
+
+  const patient = useMemo(
+    () => patients.find((row) => row.id === selected),
+    [patients, selected]
+  )
+
   return (
-    <div>
-      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200 pb-2">
-        <div className="text-sm">
-          <span className="font-semibold">{session.name}</span>{' '}
-          <span className="text-slate-500">
-            ({session.role} · {session.clinic_name})
-          </span>
+    <div className="mx-auto max-w-6xl px-4 pb-16">
+      <header className="flex flex-wrap items-center gap-3 border-b border-slate-300 py-3">
+        <div>
+          <h1 className="text-base font-semibold tracking-tight">Care Note</h1>
+          <p className="text-[11px] text-slate-500">
+            Shared longitudinal patient record · synthetic data only
+          </p>
         </div>
-        <button className="text-xs text-slate-600 underline" onClick={onSignOut}>
-          Sign out
-        </button>
-      </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-medium text-slate-800">{session.name}</span>
+          <Chip>{roleLabel(session.role)}</Chip>
+          <span className="text-slate-500">{session.clinic_name}</span>
+          <Button variant="quiet" onClick={onSignOut}>
+            Sign out
+          </Button>
+        </div>
+      </header>
 
-      <div className="mt-3 flex flex-wrap gap-1">
-        {patients.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => setSelected(p.id)}
-            className={`border px-2 py-1 text-xs ${
-              selected === p.id ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-300'
-            }`}
-          >
-            {p.name} · {p.mrn}
-          </button>
-        ))}
-      </div>
+      {patients.length > 1 && (
+        <nav className="mt-3 flex flex-wrap gap-1">
+          {patients.map((row) => (
+            <button
+              key={row.id}
+              onClick={() => setSelected(row.id)}
+              className={`rounded px-2 py-1 text-xs ring-1 transition ${
+                selected === row.id
+                  ? 'bg-slate-900 text-white ring-slate-900'
+                  : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              {row.name} <span className="font-mono text-[10px] opacity-70">{row.mrn}</span>
+            </button>
+          ))}
+        </nav>
+      )}
 
-      <div className="mt-2 text-xs text-slate-500">
-        Server returned {entries.length} entr{entries.length === 1 ? 'y' : 'ies'} for this role
-        {loadMs !== null && ` · ${loadMs}ms round-trip`}
-      </div>
+      {error && (
+        <p className="mt-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          {error}
+        </p>
+      )}
 
-      {error && <p className="mt-2 text-sm text-rose-700">{error}</p>}
+      {isPatient ? (
+        care && (
+          <div className="mt-5">
+            <PatientHome
+              care={care}
+              timing={timing}
+              sessionBusy={Boolean(processing)}
+              onRunSession={() => runScribe('ai_patient_session')}
+            />
+          </div>
+        )
+      ) : (
+        <>
+          {glance && (
+            <div className="mt-4">
+              <GlanceView
+                glance={glance}
+                timing={timing}
+                canDecide={session.role === 'clinician'}
+                onJumpTo={jumpTo}
+                onChanged={() => load(selected)}
+              />
+            </div>
+          )}
 
-      <ul className="mt-3">
-        {entries.map((entry) => (
-          <Entry key={entry.id} entry={entry} />
-        ))}
-        {!entries.length && !error && (
-          <li className="text-sm text-slate-500">Nothing visible to this role.</li>
-        )}
-      </ul>
-
-      {writableType && (
-        <div className="mt-4 border-t border-slate-200 pt-3">
-          <label className="text-xs text-slate-500">
-            Add a <span className="font-mono">{writableType}</span>
-          </label>
-          <textarea
-            className="mt-1 w-full border border-slate-300 p-2 text-sm"
-            rows={3}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Plain text. Angle brackets such as BP <130/80 are stored verbatim."
+          <Timeline
+            entries={entries}
+            processing={processing}
+            emphasis={emphasis}
+            users={users}
+            session={session}
+            onChanged={() => load(selected)}
+            registerRef={registerRef}
+            composer={
+              <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                {writable && (
+                  <div className="rounded border border-slate-200 bg-white p-2">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                      Add a {writable.label}
+                    </label>
+                    <textarea
+                      className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
+                      rows={2}
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                      placeholder="Plain text. Clinical notation such as BP <130/80 is stored exactly as written."
+                    />
+                    <Button variant="primary" disabled={!draft.trim()} onClick={addEntry}>
+                      Add to record
+                    </Button>
+                  </div>
+                )}
+                {session.role !== 'admin' && (
+                  <div className="rounded border border-slate-200 bg-white p-2">
+                    <label className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                      Capture a consult
+                    </label>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Runs a synthetic transcript through redaction, then summarisation.
+                      Identifiers are stripped before any text leaves the server.
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {Object.entries(SCRIBE_LABEL).map(([value, label]) => (
+                        <Button
+                          key={value}
+                          disabled={Boolean(processing) || !patient}
+                          onClick={() => runScribe(value)}
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            }
           />
-          <button
-            className="mt-1 border border-slate-800 bg-slate-800 px-3 py-1 text-sm text-white disabled:opacity-40"
-            onClick={addEntry}
-            disabled={!draft.trim()}
-          >
-            Add entry
-          </button>
-        </div>
+        </>
       )}
     </div>
   )
@@ -264,37 +332,30 @@ export default function App() {
 
   useEffect(() => {
     // Restore an existing session from the httpOnly cookie. Nothing is read
-    // from localStorage because nothing was ever written there.
-    api('/auth/me')
+    // from browser storage because nothing was ever written there.
+    Api.me()
       .then(setSession)
       .catch(() => setSession(null))
       .finally(() => setChecking(false))
   }, [])
 
   async function signOut() {
-    await api('/auth/logout', { method: 'POST' }).catch(() => {})
+    await Api.logout().catch(() => {})
     setSession(null)
   }
 
-  return (
-    <main className="mx-auto max-w-3xl p-8 font-sans">
-      <h1 className="text-2xl font-semibold">Care Note</h1>
-      <p className="mt-1 text-sm text-slate-600">
-        Shared longitudinal patient note · Phase 1 walking skeleton · synthetic data only
+  if (checking) {
+    return <p className="p-8 text-sm text-slate-500">Checking session…</p>
+  }
+  return session ? (
+    <Workspace session={session} onSignOut={signOut} />
+  ) : (
+    <div className="px-4">
+      <h1 className="mt-10 text-center text-xl font-semibold tracking-tight">Care Note</h1>
+      <p className="mt-1 text-center text-sm text-slate-600">
+        Shared longitudinal patient record
       </p>
-      <p className="mt-1 text-xs text-slate-400">
-        What you can see below is decided by the server, not by this page.
-      </p>
-
-      <section className="mt-6">
-        {checking ? (
-          <p className="text-sm text-slate-500">Checking session…</p>
-        ) : session ? (
-          <Timeline session={session} onSignOut={signOut} />
-        ) : (
-          <LoginForm onLoggedIn={setSession} />
-        )}
-      </section>
-    </main>
+      <LoginForm onLoggedIn={setSession} />
+    </div>
   )
 }

@@ -1,3 +1,30 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-paper text-ink antialiased;
+  }
+
+  /* Keyboard focus must stay visible. A clinician navigating a chart by
+     keyboard between gloved-hands moments is a real user, not an edge case. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-offset-1 ring-slate-900;
+  }
+}
+
+@layer utilities {
+  /* The provenance emphasis used when a highlight is clicked through to its
+     source span. Deliberately an underline plus a background rather than a
+     background alone, so it survives being printed or read without colour. */
+  .span-emphasis {
+    @apply bg-amber-200/70 decoration-amber-700 underline decoration-2 underline-offset-2;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .motion-pulse {
+      animation: none;
+    }
+  }
+}

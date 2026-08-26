@@ -29,9 +29,17 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from app.core.db import Base, SessionLocal, engine
-from app.core.enums import EntryType, InteractionType, RiskLevel, Role
+from app.core.enums import (
+    CommentStatus,
+    EntryType,
+    InteractionType,
+    RiskLevel,
+    Role,
+    TaskStatus,
+)
 from app.core.provenance import entry_pointer, session_pointer
-from app.models import AIScribedNote, Clinic, Entry, Patient, User, Version
+from app.models import AIScribedNote, Clinic, Comment, Entry, Patient, Task, User, Version
+from app.services import highlights as highlight_service
 from app.security.auth import hash_password
 
 # Seed password for every demo account. Dev fixture only — see README.
@@ -274,9 +282,85 @@ def seed(reset: bool = False) -> None:
             risk=RiskLevel.HIGH, days_ago=2,
         )
 
+        # -- longitudinal depth -----------------------------------------
+        # Phase 1 seeded only the last week, which cannot demonstrate the one
+        # thing this product exists for: context that survives across visits.
+        # These two entries sit roughly sixteen and seven months back so the
+        # timeline has real distance in it, and so the Glance View's recency
+        # decay has something to actually decay against.
+        _add_entry(
+            db, entry_id="entry-a1-hist-2025", patient_id="patient-a1", clinic_id="clinic-a",
+            author_id="u-a-clinician", author_role=Role.CLINICIAN,
+            entry_type=EntryType.CLINICIAN_SECTION,
+            title="Annual review",
+            content=(
+                "T2DM stable on metformin 1g BD. HbA1c 7.1%. No neuropathy on "
+                "monofilament testing. Penicillin allergy confirmed - rash in "
+                "childhood, no anaphylaxis. Continue current management, review "
+                "in 12 months."
+            ),
+            risk=RiskLevel.LOW, days_ago=498,
+        )
+        _add_entry(
+            db, entry_id="entry-a1-hist-2026", patient_id="patient-a1", clinic_id="clinic-a",
+            author_id="u-a-staff", author_role=Role.STAFF,
+            entry_type=EntryType.STAFF_NOTE,
+            title="Phone follow-up",
+            content=(
+                "Called about missed appointment. Reports work pressure. "
+                "Rebooked. Mentioned occasional dizziness on standing - advised "
+                "to raise at next visit."
+            ),
+            days_ago=201,
+        )
+
+        # -- collaboration state ----------------------------------------
+        # A chart with no outstanding work looks finished, and a Glance View
+        # with an empty "open actions" column cannot show what it is for.
+        staff_entry = db.get(Entry, "entry-a1-staff")
+        comment = Comment(
+            id="comment-a1-1",
+            entry_id=staff_entry.id,
+            clinic_id="clinic-a",
+            author_id="u-a-staff",
+            author_role=Role.STAFF,
+            body=(
+                "@clinician_a she is missing the evening dose fairly consistently. "
+                "Worth discussing a once-daily option?"
+            ),
+            mentions='["u-a-clinician"]',
+            status=CommentStatus.OPEN,
+            is_internal=True,
+            created_at=_now() - timedelta(days=2),
+        )
+        db.add(comment)
+        db.add(
+            Task(
+                id="task-a1-1",
+                clinic_id="clinic-a",
+                patient_id="patient-a1",
+                entry_id=staff_entry.id,
+                description="Arrange repeat urine ACR before next review",
+                assigned_to="u-a-staff",
+                assigned_to_role=Role.STAFF,
+                assigned_by="u-a-clinician",
+                status=TaskStatus.OPEN,
+                created_at=_now() - timedelta(days=3),
+            )
+        )
+        db.flush()
+
+        # -- highlight generation ----------------------------------------
+        # Scores are computed on write, so a seeded chart needs the same pass a
+        # written one gets. Without this a reviewer's first login shows an empty
+        # Glance View and the product looks like it does nothing.
+        for entry in db.query(Entry).all():
+            highlight_service.refresh_entry_highlights(db, entry)
+
         db.commit()
         print("Seeded 2 clinics, 4 patients, 8 users (one per role per clinic), "
-              "7 entries (1 AI-scribed).")
+              "9 entries (1 AI-scribed), 1 open comment thread, 1 open task, "
+              "and generated highlights.")
         print(f"Login with any username above / password: {DEMO_PASSWORD}")
         print("Usernames: clinician_a staff_a admin_a patient_a "
               "clinician_b staff_b admin_b patient_b")
