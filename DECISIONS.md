@@ -272,3 +272,10 @@ future contributor to form.
 
 **Cost:** if a later phase does need real rich text (formatting, tables), this
 decision reverses and a sanitizer becomes mandatory at that moment.
+
+### D-019 Deferred scope: translation & handwritten note capture
+
+Considered multilingual patient summaries and OCR-based handwritten note capture. Deferred both for the 72-hour build:
+
+Multilingual summaries: low-cost future path (extend the existing Phase 2.2 LLM call to emit a second-language summary when a patient's preferred language is set) — deferred only for time, not architecture.
+Handwriting OCR: deferred structurally, not just for time. It's a different ingestion pipeline (image → OCR → redact → summarize), redaction is materially harder on noisy OCR output than clean transcript text, and medical handwriting OCR accuracy is a hard problem even for well-resourced products. Ambient voice capture (Phase 5) already solves the underlying "fast unstructured capture" need more safely.
