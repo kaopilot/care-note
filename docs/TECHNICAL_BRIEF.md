@@ -183,11 +183,29 @@ authors no clinical content (D-011), so it cannot quietly alter the record.
 most conflicts are prevented by construction; presence is polish paid for in
 infrastructure.
 
-**Deferred: multilingual summaries and handwriting capture (D-019).** Both
-considered, cut for different reasons. Multilingual is a *time* deferral only —
-the path is a second-language summary from the existing LLM call, and
-code-switched speech already survives redaction, storage and summarisation
-tagged per segment, so the substrate exists. Handwriting OCR was deferred
+**Multilingual: partially closed, and the design point matters (D-058).** Phase
+5 carried code-switched speech through intact but tagged English only, so
+identical clinical content produced `['symptom:swelling']` in English and `[]`
+in Malay — no tags, no score, never on the Glance View. That fails in the worst
+direction: the patients least likely to be understood in English are the ones
+the system stops surfacing. A Malay vocabulary now maps each term to the
+**canonical English tag**, so `bengkak` emits `symptom:swelling`. That is not
+cosmetic — tags are the keys Phase 4 learns against, and a separate
+`symptom:bengkak` would have split one concept into two features and stopped a
+clinic's learned attention transferring across the language its patients used.
+Scope is deliberately narrow: only terms whose English counterpart already
+exists, so no English input changes behaviour. Still unbuilt: translation,
+non-English summary generation, and every language but Malay. The fourteen terms
+need native-speaker and clinical review — the mechanism is proven, the word list
+is a demonstration. Testing it also surfaced that **negation is unhandled in
+both languages** ("Patient denies chest pain" tags chest pain); pre-existing,
+now pinned by tests in both languages so a fix cannot be applied to one and not
+the other.
+
+**Deferred: multilingual summary generation and handwriting capture (D-019).**
+Summary generation in a second language is a *time* deferral only — the path is
+a second-language summary from the existing LLM call. Handwriting OCR was
+deferred
 **structurally**: a different ingestion pipeline (image → OCR → redact →
 summarise) where redaction is materially harder on noisy output — one
 mis-recognised character defeats a pattern that would have caught an identifier
@@ -244,7 +262,7 @@ production shape; the honest consequence is that **this build is not safe for
 real PHI as-is**, which the README states too so it cannot be missed by someone
 who opens one file.
 
-**Verification.** 351 tests, no API key or network needed. Access-control and
+**Verification.** 385 tests, no API key or network needed. Access-control and
 history tests were **deliberately broken to confirm they can fail** — reversing
 D-004 fails exactly the staff-visibility tests, removing the clinic filter fails
 15, disabling the conflict guard fails 3. A security test that cannot fail is

@@ -152,6 +152,65 @@ ACTION_CUES: dict[str, str] = {
     "switch to": "medication change",
 }
 
+# --------------------------------------------------------------------------
+# Malay clinical vocabulary (Phase 6)
+# --------------------------------------------------------------------------
+#
+# Phase 5 carried code-switched speech through redaction, storage and
+# summarisation intact and tagged it per segment — but `tag_span` read English
+# only, so a patient describing symptoms in Malay produced no tags, scored
+# nothing, and never reached the Glance View. In a Singapore or Malaysian clinic
+# that is not an edge case, and it fails in the worst direction: the patients
+# least likely to be understood in English are the ones the system quietly
+# stops surfacing. See DECISIONS.md D-058.
+#
+# THE DESIGN POINT: each term maps to the **canonical English vocabulary key**,
+# so `bengkak` emits `symptom:swelling` — the identical string `swelling` emits.
+# Tags are the dictionary keys Phase 4 learns weights against, so emitting
+# `symptom:bengkak` would create a second, separate feature and a clinic's
+# learned attention would not transfer across the language its patients
+# happened to use. One concept, one tag, whatever language it arrived in.
+#
+# SCOPE, deliberately narrow: only terms whose English counterpart is *already*
+# in the tables above. This makes the change purely additive — no English input
+# changes behaviour, because no English key is added or altered. Terms with no
+# existing counterpart (`gatal` itchy, `muntah` vomiting, `cirit-birit`
+# diarrhoea) are left out rather than added on both sides, which would be a
+# scoring change to English prose smuggled in under a translation heading.
+#
+# NOT a translation layer. This is recall for a clinical watchlist. The system
+# still stores and displays the original words verbatim — it never rewrites what
+# a patient said into English.
+MALAY_CLINICAL_TERMS: dict[str, str] = {
+    # symptom → the English key in RED_FLAG_TERMS whose tag this reuses
+    "bengkak": "swelling",
+    "demam": "febrile",
+    "sesak nafas": "shortness of breath",
+    "semput": "breathless",
+    "sakit dada": "chest pain",
+    "berdarah": "bleeding",
+    "pendarahan": "bleeding",
+    "lebam": "bruising",
+    "kebas": "numbness",
+    "pengsan": "fainted",
+    "pitam": "fainted",
+    "jatuh": "fall",
+    "lemah": "weakness",
+    "kabur": "blurred vision",
+}
+
+# Allergy vocabulary is checked as a set rather than mapped, so it is listed
+# separately. `alah` is the stem of `alahan` (allergy) and `alergi` (loan word).
+MALAY_ALLERGY_TERMS: tuple[str, ...] = ("alah", "alergi", "alahan")
+
+# Malay is the only non-English vocabulary here, because it is the one the
+# Phase 5 capture fixtures actually contain (`en-ms`). Mandarin, Tamil and Hokkien
+# are all common in the same clinics and are NOT covered — adding three more
+# languages from the same generalist knowledge that produced this one would
+# multiply an unreviewed risk rather than reduce a gap. See D-058 on why every
+# term here still needs a native-speaker and clinical review before this is more
+# than a demonstration that the mechanism works.
+
 # Hedging. Used to derive a confidence figure for offline summaries, and to
 # down-weight a span that is speculation rather than finding.
 UNCERTAINTY_TERMS: tuple[str, ...] = (
@@ -256,9 +315,24 @@ def tag_span(text: str) -> tuple[list[str], list[str]]:
             tags.append(f"symptom:{term.replace(' ', '_')}")
             reasons.append(reason.capitalize())
 
+    # Malay terms emit the *English* key's tag, so one concept is one feature
+    # regardless of the language it arrived in (D-058). The reason string names
+    # the term that actually matched, because a clinician reading "Oedema" on
+    # the Glance View should be able to see it came from the patient saying
+    # "bengkak" — the provenance link lands on Malay text either way, and an
+    # unexplained English reason over Malay source reads as a mistranslation.
+    for malay_term, english_key in MALAY_CLINICAL_TERMS.items():
+        if re.search(rf"\b{re.escape(malay_term)}\b", lowered):
+            tags.append(f"symptom:{english_key.replace(' ', '_')}")
+            reason = RED_FLAG_TERMS.get(english_key, english_key)
+            reasons.append(f"{reason.capitalize()} (Malay: {malay_term})")
+
     if any(term in lowered for term in ALLERGY_TERMS):
         tags.append("entity:allergy")
         reasons.append("Allergy or intolerance documented")
+    elif any(re.search(rf"\b{re.escape(t)}", lowered) for t in MALAY_ALLERGY_TERMS):
+        tags.append("entity:allergy")
+        reasons.append("Allergy or intolerance documented (Malay)")
 
     if any(cue in lowered for cue in COMPLAINT_CUES):
         tags.append("entity:chief_complaint")

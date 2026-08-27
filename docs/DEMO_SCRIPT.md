@@ -89,7 +89,7 @@ about it."*
 
 ---
 
-## Scenario C — Longitudinal context, learning, decay (~2 min)
+## Scenario C — Longitudinal context, learning, decay (~2.5 min)
 
 1. Scroll the timeline to the **older entries** — the 2025 and early-2026 dates
    are seeded specifically for this.
@@ -105,17 +105,34 @@ about it."*
    *behaviour*, then aggregated through the same code path a live click uses.
    Seeding the weights directly would have been shorter and would have been a
    lie."*
-4. **Data decay.** Point at the compressed 2026 history entry.
+4. **Code-switched capture.** Scroll to the patient note titled **"Kaki saya"**
+   — "Kaki bengkak again this week... Kebas sikit waktu pagi."
+   **Say:** *"This is what a patient in a Singapore or Malaysian clinic actually
+   writes — two languages in one sentence. Until yesterday this entry produced
+   no clinical tags at all, so it scored nothing and never reached the Top Card,
+   even though it describes exactly the oedema the consult is about. The
+   patients least likely to be understood in English were the ones the system
+   quietly stopped surfacing."*
+   Point at its highlight in the Top Card: reason reads **"Oedema (Malay:
+   bengkak)"**.
+   **Say:** *"`bengkak` emits the same tag `swelling` emits — not a separate
+   one. That matters for the learning layer: one concept has to be one feature,
+   or a clinic's learned attention wouldn't transfer across whichever language
+   the patient happened to use. And nothing is translated — the record still
+   shows exactly what she wrote."*
+   If asked what's missing: only Malay, only fourteen terms, needs a
+   native-speaker review, and negation is unhandled in both languages.
+5. **Data decay.** Point at the compressed 2026 history entry.
    **Say:** *"Hot, warm, cold. Older low-priority entries compress to an
    extractive summary with the original archived — byte-exact reversible, and
    provenance still resolves through to the archive, so a pointer into a
    compressed entry doesn't dangle. The 2025 entry next to it was held back
    because it documents an allergy: protection rules beat age."*
-5. **(Patient tab)** Switch to `patient_a`.
+6. **(Patient tab)** Switch to `patient_a`.
    **Say:** *"Same record, different register. Plain language, no scores, no
    clinical shorthand, no internal comments and no raw AI notes — and that's
    enforced server-side, not by hiding things in this page."*
-6. **Close on the thesis:** *"The brief asks how you build a system people trust
+7. **Close on the thesis:** *"The brief asks how you build a system people trust
    only as far as they should. Three answers: nothing AI-generated is a fact
    until a clinician accepts it; every claim opens to its source in one click;
    and when a clinician disagrees with the AI, the clinician wins — but the

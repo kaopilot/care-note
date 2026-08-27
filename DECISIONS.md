@@ -1125,13 +1125,14 @@ README's gap list too, in the same words.
 * **Multi-device capture.** One recorder, one stream. Merging two devices'
   audio needs clock alignment across them, which is a real distributed-systems
   problem and not a UI one.
-* **Multilingual medical terminology.** Code-switched speech is carried through
-  redaction, storage and summarisation intact and tagged per segment
-  (`en-ms` in the fixtures), which is demonstrable. What is *not* built is
-  translation or a non-English clinical vocabulary — `features.py` tags English
-  terms only, so a Malay symptom description is stored and shown faithfully but
-  is not recognised as a clinical entity. Consistent with D-019, which deferred
-  multilingual patient summaries for the same reason.
+* **Multilingual medical terminology.** *Partially closed in Phase 6 — see
+  D-058.* At the end of Phase 5 the position was: code-switched speech is
+  carried through redaction, storage and summarisation intact and tagged per
+  segment (`en-ms` in the fixtures), but `features.py` read English only, so a
+  Malay symptom description was stored and shown faithfully and never
+  recognised as a clinical entity. Phase 6 added a Malay clinical vocabulary.
+  Translation and non-English *summary generation* remain unbuilt, consistent
+  with D-019.
 * **Streaming transcription.** Capture is upload-then-process. Live partial
   transcripts during a consult are a websocket and a different UX.
 
@@ -1257,3 +1258,76 @@ than as code nobody dared touch.
 deployment should either strip the router behind an environment flag or move
 these tests to an app fixture that mounts the routes only under pytest. Both are
 small; neither was worth doing on the final day.
+
+### D-058 · A Malay clinical vocabulary, mapped to canonical English tags
+
+Phase 5 left `features.py` reading English only. The consequence was not subtle
+once looked at directly: identical clinical content produced tags in English and
+**nothing at all** in Malay.
+
+```
+"Ankle swelling worst at night."            -> ['symptom:swelling']
+"Kaki bengkak, malam paling teruk."         -> []
+"She fainted, numbness in both feet."       -> ['symptom:fainted', 'symptom:numbness']
+"Dia pengsan, kaki kebas dua belah."        -> []
+```
+
+No tags means no score, which means the span never reaches the Glance View. In a
+Singapore or Malaysian clinic this is not an edge case, and it fails in the
+worst available direction: the patients least likely to be understood in English
+are exactly the ones the system quietly stops surfacing. The brief also lists
+multilingual medical terminology as extra credit, but the reason to build it is
+the first one.
+
+**Design: each Malay term maps to the canonical English vocabulary key**, so
+`bengkak` emits `symptom:swelling` — the identical string `swelling` emits.
+Tags are the dictionary keys Phase 4 learns weights against. Emitting
+`symptom:bengkak` would have created a second, unrelated feature, and a clinic's
+learned attention would not transfer across whichever language a patient
+happened to use — which would have made the multilingual support actively worse
+than nothing for the learning layer, while looking like a feature.
+
+**Scope, deliberately narrow: only terms whose English counterpart already
+exists.** This makes the change purely additive — no English key is added or
+altered, so no English input can behave differently, which
+`test_english_prose_picks_up_no_malay_tags` asserts. Terms with no counterpart
+(`gatal` itchy, `muntah` vomiting, `cirit-birit` diarrhoea) were left out rather
+than added on both sides; adding them would be a scoring change to English prose
+smuggled in under a translation heading, and it would need its own decision and
+its own re-measurement.
+
+This is **recall for a clinical watchlist, not translation.** The system still
+stores and displays the patient's original words verbatim; it never rewrites what
+someone said into English. The `risk_reason` names the term that actually matched
+— "Oedema (Malay: bengkak)" — because an unexplained English reason sitting over
+Malay source text reads as a mistranslation of the patient.
+
+**Malay only, and that is a deliberate stopping point.** Mandarin, Tamil and
+Hokkien are all common in the same clinics. Adding three more languages from the
+same generalist knowledge that produced this one would multiply an unreviewed
+risk rather than reduce a gap. Malay was chosen because it is the language the
+Phase 5 capture fixtures actually contain.
+
+**What is genuinely still wrong with it:**
+
+* **Every term needs native-speaker and clinical review.** This vocabulary was
+  written from general knowledge, not from a Malaysian clinical lexicon or by
+  someone who practises in one. The mechanism is proven; the word list is a
+  demonstration, not a validated resource. It should not go near a real clinic
+  before a Malay-speaking clinician has read all fourteen entries.
+* **Negation is not handled — in either language.** "Tiada demam" (no fever)
+  tags `symptom:febrile`. This was found while testing this change but is
+  **pre-existing and not introduced by it**: "Patient denies chest pain" and
+  "Without swelling or redness" fail identically in English and always have.
+  Both are pinned by `test_negation_is_not_handled_in_either_language`, so the
+  day someone adds negation handling it must be applied to both languages at
+  once rather than one being fixed and the other quietly left behind. Not fixed
+  here because a negation guard changes English scoring, needs its own decision
+  and its own Glance View re-measurement, and this is the final day. The failure
+  direction is the safe one: a ruled-out symptom is surfaced for a human to
+  dismiss, never a real one suppressed.
+* **`jatuh` (fall) also appears in place names.** A referral letter naming one
+  can register a falls-risk symptom. Asserted in
+  `test_known_false_positive_is_documented_not_denied` so it is a recorded
+  property rather than a surprise. Same failure direction: less precise, never
+  silently hiding.

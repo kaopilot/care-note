@@ -18,7 +18,7 @@ stubbed.
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it) · [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (351 tests).
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (385 tests).
 
 ---
 
@@ -111,10 +111,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 351 tests
+pytest tests/ -v                  # from the repository root — 385 tests
 ```
 
-351 tests, all passing, no API key or network required. Roughly 31 seconds.
+385 tests, all passing, no API key or network required. Roughly 31 seconds.
 
 To run just the four files the brief names:
 
@@ -730,10 +730,21 @@ patient gets a receipt for what they sent, not the clinical note written from it
   the browser's work, not ours. No acoustic preprocessing of our own.
 - **Multi-device capture.** One recorder, one stream. Merging two devices needs
   clock alignment across them.
-- **Multilingual medical terminology.** Code-switched speech is carried through
-  faithfully and tagged, but `features.py` recognises English clinical terms
-  only — a Malay symptom description is stored and shown correctly but is not
-  tagged as a clinical entity.
+- **Multilingual medical terminology — partial.** A Malay clinical vocabulary is
+  built (D-058): `bengkak`, `demam`, `sesak nafas` and eleven more map to the
+  *same* canonical tag their English counterparts emit, so a Malay symptom
+  description now scores and reaches the Glance View, and Phase 4's learned
+  weights transfer across the language a patient used. What is **not** built:
+  translation, non-English summary generation, and any language other than
+  Malay — Mandarin and Tamil are equally common in the same clinics and are not
+  covered. The fourteen terms were written from general knowledge and **need
+  native-speaker and clinical review before this goes near a real clinic**; the
+  mechanism is proven, the word list is a demonstration.
+- **Negation, in either language.** "Tiada demam" (no fever) tags a fever
+  concern — and so does "Patient denies chest pain" in English. Pre-existing,
+  not introduced by the Malay vocabulary, and pinned by a test in both languages
+  so a future fix has to address both. Fails in the safe direction: a ruled-out
+  symptom is shown for a human to dismiss, never a real one suppressed.
 - **Streaming transcription.** Upload-then-process; no live partial transcripts.
 - **Consent artefact on patient recordings.** The clinician is a party to a
   patient-made recording and is never asked. Not modelled at all.

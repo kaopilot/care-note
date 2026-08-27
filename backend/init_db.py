@@ -301,6 +301,24 @@ def seed(reset: bool = False) -> None:
             ),
             days_ago=1,
         )
+        # A code-switched patient note, added in Phase 6 alongside the Malay
+        # clinical vocabulary (D-058). It exists so the capability is visible in
+        # the demo rather than only true in a test: before D-058 this entry
+        # produced no feature tags at all and never reached the Glance View,
+        # despite describing exactly the oedema the consult is about. The
+        # English half of the sentence is what a Singapore/Malaysian patient
+        # actually writes — the two languages are interleaved, not separated.
+        _add_entry(
+            db, entry_id="entry-a1-pt-ms", patient_id="patient-a1", clinic_id="clinic-a",
+            author_id="u-a-patient", author_role=Role.PATIENT,
+            entry_type=EntryType.PATIENT_NOTE,
+            title="Kaki saya",
+            content=(
+                "Kaki bengkak again this week, worse at night. Kebas sikit "
+                "waktu pagi. Tiada demam, no pain when I walk."
+            ),
+            days_ago=2,
+        )
 
         # -- one AI-scribed entry ---------------------------------------
         # Seeded directly rather than generated, because the scribe pipeline is
@@ -480,7 +498,7 @@ def seed(reset: bool = False) -> None:
         ]
 
         print("Seeded 2 clinics, 4 patients, 8 users (one per role per clinic), "
-              "9 entries (1 AI-scribed), 1 open comment thread, 1 open task, "
+              "10 entries (1 AI-scribed, 1 code-switched), 1 open comment thread, 1 open task, "
               "and generated highlights.")
         print(f"Phase 4: seeded {db.query(InteractionLog).count()} prior interactions; "
               f"learned {db.query(FeatureWeight).count()} feature weights for clinic-a.")
