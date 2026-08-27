@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.db import Base, engine
 from app.routes import (
     auth_routes,
+    capture_routes,
     comment_routes,
     demo_rbac,
     entry_routes,
@@ -50,6 +51,7 @@ app.include_router(comment_routes.router)
 app.include_router(highlight_routes.router)
 app.include_router(glance_routes.router)
 app.include_router(learning_routes.router)
+app.include_router(capture_routes.router)
 # Phase 0's throwaway routes. Kept for now: tests/test_rbac_pattern.py still
 # proves the enforcement pattern against them independently of any feature.
 # Phase 3 folds those assertions into the real-route suite and deletes these.
@@ -80,4 +82,4 @@ def on_startup() -> None:
 
 @app.get("/health", tags=["meta"])
 def health() -> dict:
-    return {"status": "ok", "service": "care-note", "phase": "4"}
+    return {"status": "ok", "service": "care-note", "phase": "5"}

@@ -297,6 +297,97 @@ class TranscriptSegment(Base):
     __table_args__ = (UniqueConstraint("session_id", "sequence", name="uq_session_sequence"),)
 
 
+class CaptureSession(Base):
+    """One ambient voice capture (Phase 5) — everything about the recording
+    EXCEPT the recording.
+
+    The audio itself is never written here, to disk, or anywhere else. It is
+    transcribed in memory and dropped when the request ends (D-045). What
+    survives is this row plus the already-redacted `TranscriptSegment` rows, so
+    the strongest identifier in a consult — a voice — has no persistence story
+    to get wrong.
+
+    `transcription_simulated` is the honesty flag. With no ASR provider
+    configured the stub cannot really transcribe audio, and every surface that
+    shows this capture says so rather than letting a reviewer assume speech
+    recognition happened. See DECISIONS.md D-046.
+    """
+
+    __tablename__ = "capture_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Same session_id the TranscriptSegment rows and the Entry's
+    # provenance_pointer carry, so one string joins capture → segments → note.
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    clinic_id: Mapped[str] = mapped_column(ForeignKey("clinics.id"), nullable=False, index=True)
+    patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
+    entry_id: Mapped[str | None] = mapped_column(ForeignKey("entries.id"), nullable=True)
+
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)      # CaptureKind
+    source: Mapped[str] = mapped_column(String(30), nullable=False)    # CaptureSource
+
+    asr_provider: Mapped[str] = mapped_column(String(50), default="none")
+    asr_model: Mapped[str] = mapped_column(String(100), default="none")
+    transcription_simulated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Accounting for the audio we were handed and did not keep.
+    audio_bytes_received: Mapped[int] = mapped_column(Integer, default=0)
+    audio_retained: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    audio_mime: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    segment_count: Mapped[int] = mapped_column(Integer, default=0)
+    # JSON list of BCP-47-ish tags seen across segments, e.g. ["en","ms"].
+    languages: Mapped[str] = mapped_column(Text, default="[]")
+    mean_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    low_confidence_segments: Mapped[int] = mapped_column(Integer, default=0)
+    # Segments whose time ranges intersect the previous one — people talking
+    # over each other. Computed from timings, not from acoustics (D-047).
+    overlap_segments: Mapped[int] = mapped_column(Integer, default=0)
+    redaction_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    device_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_by_role: Mapped[Role] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SummaryAttribution(Base):
+    """Which words in a generated summary came from which spoken segment.
+
+    The Entry's own `provenance_pointer` names the session; this names the
+    sentence. It is the difference between "this note came from that consult"
+    and "this line came from the patient, 42 seconds in, and here is the
+    recogniser's confidence in those exact words".
+
+    Rows exist only where a link could actually be established — see
+    `services/attribution.py` and DECISIONS.md D-048.
+    """
+
+    __tablename__ = "summary_attributions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    entry_id: Mapped[str] = mapped_column(ForeignKey("entries.id"), nullable=False, index=True)
+    clinic_id: Mapped[str] = mapped_column(ForeignKey("clinics.id"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+
+    # Character offsets into the Entry content at `source_version_number`.
+    span_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    span_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_version_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    segment_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Resolvable pointer, transcript://<session_id>#segment:<sequence>.
+    provenance_pointer: Mapped[str] = mapped_column(String(500), nullable=False)
+    match_type: Mapped[str] = mapped_column(String(20), nullable=False)  # AttributionMatch
+    match_score: Mapped[float] = mapped_column(Float, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    __table_args__ = (
+        Index("ix_attribution_entry_span", "entry_id", "span_start"),
+    )
+
+
 class Task(Base):
     """An open action — what the Glance View's 'needs lab order' row is made of."""
 

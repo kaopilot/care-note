@@ -51,6 +51,50 @@ class InteractionType(StrEnum):
     AI_PATIENT_SESSION = "ai_patient_session"
 
 
+class CaptureKind(StrEnum):
+    """Who recorded an ambient consult capture (Phase 5).
+
+    This is an access dimension, not a label. A `PATIENT` capture may only be
+    submitted by a patient login for their own record, and a `CLINICAL` capture
+    only by staff or a clinician. The kind is checked against the caller's role
+    server-side; it is never trusted from the request body alone.
+    """
+
+    PATIENT = "patient"
+    CLINICAL = "clinical"
+
+
+class CaptureSource(StrEnum):
+    """How the audio or transcript reached the server.
+
+    Recorded per capture because the three differ in what they can honestly
+    claim. A transcript upload was never transcribed by us at all; a live
+    recording came from the browser's MediaRecorder; an audio upload is a file
+    someone chose. The Glance View never shows this, but the provenance panel
+    does — a reviewer should be able to tell which path produced a note.
+    """
+
+    LIVE_RECORDING = "live_recording"
+    AUDIO_UPLOAD = "audio_upload"
+    TRANSCRIPT_UPLOAD = "transcript_upload"
+
+
+class AttributionMatch(StrEnum):
+    """How firmly a summary line traces to a transcript segment (Phase 5).
+
+    `VERBATIM` means the segment's words appear in the summary character for
+    character — the pointer is provable, not asserted. `DERIVED` means the line
+    and the segment share enough vocabulary to be confident but the wording
+    changed, which is what a real model does when it paraphrases. Lines that
+    match nothing get no attribution row at all: a provenance system that
+    invents a source when it cannot find one is worse than one that admits the
+    gap. See DECISIONS.md D-048.
+    """
+
+    VERBATIM = "verbatim"
+    DERIVED = "derived"
+
+
 class RiskLevel(StrEnum):
     NONE = "none"
     LOW = "low"

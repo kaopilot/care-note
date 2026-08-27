@@ -40,5 +40,20 @@ class Settings:
     # everywhere else, including tests.
     scribe_delay_ms: int = int(os.getenv("CARENOTE_SCRIBE_DELAY_MS", "0"))
 
+    # --- Phase 5: ambient voice capture ---------------------------------
+    # "stub" (default, in-process, simulated and flagged as such), "local"
+    # (documented production path, unimplemented), or "remote".
+    asr_provider: str = os.getenv("CARENOTE_ASR_PROVIDER", "stub")
+    asr_model: str = os.getenv("CARENOTE_ASR_MODEL", "whisper-large-v3")
+
+    # Audio cannot be redacted before transcription — there is no regex over a
+    # waveform (see app/ai/asr_client.py). So sending a recording to a hosted
+    # recogniser means sending un-redacted patient speech off-box, and that
+    # requires someone to say so explicitly. Default off; the remote provider
+    # raises rather than downgrading to the stub when it is off.
+    asr_allow_audio_egress: bool = (
+        os.getenv("CARENOTE_ASR_ALLOW_AUDIO_EGRESS", "false").lower() == "true"
+    )
+
 
 settings = Settings()
