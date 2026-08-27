@@ -52,9 +52,10 @@ app.include_router(highlight_routes.router)
 app.include_router(glance_routes.router)
 app.include_router(learning_routes.router)
 app.include_router(capture_routes.router)
-# Phase 0's throwaway routes. Kept for now: tests/test_rbac_pattern.py still
-# proves the enforcement pattern against them independently of any feature.
-# Phase 3 folds those assertions into the real-route suite and deletes these.
+# Phase 0's RBAC pattern-demo routes. Retained deliberately (D-057), not
+# forgotten: tests/test_rbac_pattern.py proves enforcement against a surface
+# with no product logic, so a failure there is unambiguously an enforcement bug.
+# Same require_access gate as every product route; they expose nothing extra.
 app.include_router(demo_rbac.router)
 
 

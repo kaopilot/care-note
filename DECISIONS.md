@@ -1230,3 +1230,30 @@ never showed it.
   backfill.
 * **A formal accessibility audit.** Stated in the README as a known gap rather
   than attempted badly in the last hours.
+
+### D-057 · The `/demo/*` pattern routes are retained, reversing D-026
+
+D-026 said Phase 3 would fold the pattern assertions into the real-route suite
+and delete both `/demo/*` and `tests/test_rbac_pattern.py`. Phase 3 did the
+first half — `test_rbac_scope.py` covers the real routes — and never did the
+second. Found in the Phase 6 sweep, where the module docstring still read
+"Delete before submission if they are still here and unused."
+
+**Decision: keep them, and say so.** They are not unused: 18 tests exercise
+them, and those tests are worth keeping for a reason that only became clear
+later. They assert role and clinic enforcement against a surface carrying no
+product logic at all, so when one fails it is unambiguously the enforcement
+layer that broke, not a feature. Every other RBAC test now runs through routes
+with filtering, policy lookups and serialisation in the path. Deleting the
+routes would delete the only tests that isolate the boundary itself.
+
+They are gated by the same `require_access` dependency as everything else and
+return nothing a caller's own token does not already assert, so retaining them
+costs no exposure — but they are also not product surface, and a reviewer
+opening `/docs` will see them. Recorded here so they read as a decision rather
+than as code nobody dared touch.
+
+**What this costs:** a `/demo` namespace in a production-shaped API. A real
+deployment should either strip the router behind an environment flag or move
+these tests to an app fixture that mounts the routes only under pytest. Both are
+small; neither was worth doing on the final day.

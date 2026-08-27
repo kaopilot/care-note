@@ -1,7 +1,10 @@
 # Architecture
 
-**Status:** Phase 0 complete. Scaffolding, schema, and the two safety boundaries
-(RBAC, PHI redaction) are built and tested. No product features yet.
+**Status:** Complete (Phases 0–6). Product surface, both bonus tracks
+(self-learning importance, data decay) and ambient voice capture are built;
+351 tests pass. Sections below are appended per phase, so the earliest ones
+describe foundations that later sections extend rather than replace — the
+security posture summary and the Phase 4/5/6 sections carry the current state.
 
 ---
 
@@ -177,7 +180,7 @@ authorship, so an admin account cannot quietly alter the record.
 
 ---
 
-## API surface (as of Phase 2)
+## API surface
 
 | Route | Roles | Notes |
 |---|---|---|
@@ -209,7 +212,16 @@ authorship, so an admin account cannot quietly alter the record.
 | `GET /scribe/templates` | any authenticated | Available synthetic transcripts |
 | `POST /patients/{id}/scribe` | staff, clinician, patient | Patients limited to their own AI session type |
 | `GET /health` | — | Liveness |
-| `/demo/*` | — | Phase 0 pattern demo, scheduled for deletion in Phase 3 (D-026) |
+| `GET /clinic/learning` | staff, clinician, admin | Learned weights + evidence. Asserted to carry no patient text |
+| `POST /clinic/learning/rebuild` | admin | Re-aggregates weights from the log. Not on any user-facing path |
+| `GET /clinic/decay/preview` | clinician, admin | Dry-run classification of the decay pass |
+| `POST /clinic/decay/run` | admin | Applies decay. `dry_run=True` by default |
+| `GET /entries/{id}/archive` | clinician, admin | Metadata only (sizes, timestamps) — never the archived content |
+| `POST /entries/{id}/restore` | clinician, admin | Audited restore of a cold entry; byte-exact |
+| `POST /patients/{id}/captures` | patient, staff, clinician | Ambient capture (multipart). Kind checked against role; entry type derived from the token |
+| `GET /captures/{session_id}` | staff, clinician, admin | Transcript + segments. Withheld from patients, including their own (D-049) |
+| `GET /entries/{id}/attribution` | staff, clinician, admin | Which spoken segment produced each summary line |
+| `/demo/*` | per-route | Phase 0 pattern demo, deliberately retained — see D-057 |
 
 Every response carries `X-Response-Time-Ms` from a middleware wrapping the whole
 app — the instrument behind the latency figures below.

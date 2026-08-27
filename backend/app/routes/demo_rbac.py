@@ -1,10 +1,19 @@
-"""Throwaway routes that demonstrate the RBAC pattern (Phase 0, step 4).
+"""Routes that demonstrate the RBAC pattern in isolation (Phase 0, step 4).
 
 These are NOT the product. They exist so the enforcement layer can be exercised
-and tested before any feature depends on it. Phase 1 replaces them with real
-patient/timeline routes using the identical `require_access` pattern.
+independently of any feature. Phase 1 added real patient/timeline routes using
+the identical `require_access` pattern; these were kept alongside them.
 
-Delete before submission if they are still here and unused.
+RETAINED DELIBERATELY — see DECISIONS.md D-057. D-026 originally scheduled these
+for deletion in Phase 3, which did not happen. The reason to keep them is that
+`tests/test_rbac_pattern.py` (18 tests) proves role and clinic enforcement
+against a surface with no product logic on it, so a failure there is
+unambiguously an enforcement-layer failure rather than a feature bug. That is a
+useful second opinion, and deleting the routes would delete those tests.
+
+They are gated by the same `require_access` dependency as every product route
+and expose nothing a product route would not. `/demo/whoami` returns only what
+the caller's own token already asserts.
 """
 
 from __future__ import annotations
