@@ -251,7 +251,10 @@ def create_comment(
     valid_mentions = [
         user.id
         for user in scope.query(User).filter(User.id.in_(payload.mentions or [""])).all()
-        if user.role is not Role.PATIENT
+        # `!=`, not `is not`. `User.role` is stored in a String column, so a
+        # loaded row yields a plain `str` and `is not` was always true — the
+        # filter dropped nothing. See DECISIONS.md D-055.
+        if user.role != Role.PATIENT
     ]
 
     comment = Comment(
@@ -436,7 +439,9 @@ def create_task(
         # Clinic-scoped by `scope.query`, so a task cannot be assigned across a
         # tenancy boundary even if a client sends a valid-looking id.
         assignee = scope.query(User).filter(User.id == payload.assigned_to).first()
-        if assignee is None or assignee.role is Role.PATIENT:
+        # `==`, not `is` — see DECISIONS.md D-055. With the identity check this
+        # guard never fired and a task could be assigned to a patient login.
+        if assignee is None or assignee.role == Role.PATIENT:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="assignee must be a staff, clinician or admin user in this clinic",

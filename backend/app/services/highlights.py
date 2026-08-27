@@ -124,7 +124,11 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
     # are machine output with no human investment in them, so churning them is
     # free; accepted and rejected rows are never touched here.
     for row in existing:
-        if row.status is HighlightStatus.SUGGESTED:
+        # `==`, not `is`. `Highlight.status` is declared Mapped[HighlightStatus]
+        # but stored in a String column, so a row loaded from the database comes
+        # back as a plain `str` and an identity check silently never matches.
+        # See DECISIONS.md D-055.
+        if row.status == HighlightStatus.SUGGESTED:
             db.delete(row)
     db.flush()
 
@@ -156,7 +160,7 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
     # Human-decided highlights still need rescoring: recency moves, tasks close,
     # and (from Phase 4) learned weights shift underneath them.
     for row in existing:
-        if row.status is HighlightStatus.SUGGESTED:
+        if row.status == HighlightStatus.SUGGESTED:  # `==`, not `is` — D-055
             continue
         tags = decode_tags(row.feature_tags)
         score, breakdown = scoring.score_span(
