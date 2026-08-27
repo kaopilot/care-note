@@ -6,7 +6,8 @@ Maintenance rule: append here THE MOMENT a dependency is added, in the phase
 that adds it. Do not reconstruct this file from requirements.txt at the end —
 that is how things get missed.
 
-Last updated: Phase 4 (2026-08-27)
+Last updated: Phase 6 (2026-08-27) — final. Verified against the installed
+environment and frontend/package-lock.json, not just the manifests.
 
 PHASE 1 ADDED NO DEPENDENCIES. The walking skeleton was built entirely on the
 Phase 0 stack: FastAPI routing, SQLAlchemy queries, pydantic models, React
@@ -195,3 +196,40 @@ PRIOR ART / INSPIRATION (no code or assets used)
 The candidate brief cites Google Docs (collaborative editing), Notion databases
 (structured extraction), and Slack threads (timeline history) as conceptual
 reference points. No code, design assets, or APIs from any of these were used.
+
+
+PHASE 5 — ONE NEW DEPENDENCY
+----------------------------
+python-multipart 0.0.20 (Apache-2.0), listed under BACKEND above. Required by
+Starlette to parse multipart/form-data for the Phase 5 audio and transcript
+upload endpoints. No other library was added in Phase 5, and no speech-to-text
+model, weights or service is bundled, downloaded or called — see the PHASE 5
+SPEECH-TO-TEXT section above.
+
+
+PHASE 6 — NO NEW DEPENDENCIES
+-----------------------------
+Documentation, polish and packaging only. Nothing was added to either manifest.
+
+Versions above were re-verified in Phase 6 against `pip list` in a clean venv
+built from backend/requirements.txt, and against frontend/package-lock.json,
+rather than being trusted from the manifests. Two frontend entries were found to
+have resolved to newer patch/minor versions than the ranges in package.json
+imply and are recorded here at their resolved versions: vite 5.4.21 (not
+5.4.11), @vitejs/plugin-react 4.7.0, tailwindcss 3.4.19, postcss 8.5.26,
+autoprefixer 10.5.4. All remain MIT.
+
+Transitive backend dependencies pulled in by the pinned direct ones, all
+permissively licensed and none imported directly by this codebase: starlette
+(BSD-3-Clause), anyio (MIT), idna (BSD-3-Clause), sniffio (MIT/Apache-2.0),
+h11 (MIT), httpcore (BSD-3-Clause), certifi (MPL-2.0), click (BSD-3-Clause),
+pydantic-core (MIT), typing-extensions (PSF), greenlet (MIT/PSF),
+iniconfig (MIT), packaging (Apache-2.0/BSD-2-Clause), pluggy (MIT).
+The uvicorn[standard] extra additionally installs uvloop (MIT/Apache-2.0),
+httptools (MIT), watchfiles (MIT), websockets (BSD-3-Clause) and
+python-dotenv (BSD-3-Clause).
+
+No document-generation library is vendored: docs/TECHNICAL_BRIEF.pdf was
+rendered from the Markdown source with headless Chrome at packaging time. It is
+not produced by the application and nothing in backend/ or frontend/ depends on
+it.

@@ -1148,3 +1148,85 @@ README's gap list too, in the same words.
   at all: the clinician is a party to that recording and is never asked. A
   production system needs a consent artefact on the capture, and probably a
   visible indicator in the clinical view that a patient recording exists.
+
+---
+
+## Phase 6 — Docs, polish, demo (2026-08-27)
+
+### D-055 · Enum columns are compared with `==`, never `is` (defect found in Phase 6)
+
+Every enum-valued column in this schema is declared `Mapped[SomeStrEnum]` but
+backed by a `String(20)` column. SQLAlchemy stores the string and returns a
+plain `str` on load — the column type never told it these were enums, so there
+is nothing to coerce back through. For any reloaded row:
+
+```
+row.status == HighlightStatus.SUGGESTED   ->  True    (StrEnum compares equal)
+row.status is HighlightStatus.SUGGESTED   ->  False   (different objects)
+```
+
+An object built in-session still holds the real member, so `is` works right up
+until the first reload. That is why this survived five phases: it is correct in
+the unit test that constructs the object and wrong in production, and it fails
+**silently** — no exception, no traceback, just a branch that stops executing.
+
+Three sites used `is`, and all three were live defects:
+
+| Site | Effect |
+|---|---|
+| `highlights.refresh_entry_highlights` (×2) | The guard deleting superseded suggestions never fired. Every refresh appended a second copy of every highlight, and a refresh runs on entry create, entry edit, highlight accept/reject and clinic rebuild — so duplicates compounded. The seeded chart held 32 rows for 16 spans and the Top Card rendered each claim twice. |
+| `comment_routes`, mention validation | `user.role is not Role.PATIENT` was always true, so a patient login could be stored as a mention on an internal thread they can never read (D-035). |
+| `comment_routes`, task assignment | `assignee.role is Role.PATIENT` was always false, so the guard refusing patient assignees never refused one. A task could be assigned to the patient's own login, putting their name in the clinician's "Open actions" list as the responsible party. |
+
+The duplicate-highlight one is the worst of the three, and not only cosmetically.
+The whole provenance argument is that a surfaced claim traces to one source; the
+same claim appearing twice reads as two independent sources agreeing, which is
+the opposite of what the card is supposed to communicate. It was found by
+looking at a screenshot, not by any test — 334 tests passed with it live.
+
+**Decision: fix with `==` / `!=` and pin the class with a source scan**, rather
+than migrate the columns to a real `Enum` type.
+
+The migration is the better production answer and would make `is` safe
+everywhere. It was rejected *here* for scope reasons on the final day: it
+touches ten columns across every model, changes what the ORM returns to every
+caller and serialiser in the codebase, and would be a wide, lightly-tested
+change made hours before submission. Trading a narrow verified fix for a broad
+unverified one at this point is the wrong risk. Recorded as a known gap rather
+than done quietly badly — see the Phase 6 deferred list below.
+
+What guards it in the meantime is `tests/test_phase6_regressions.py`: behavioural
+coverage for all three defects, a test asserting the `str`-not-enum mechanism
+itself (so it fails loudly if the columns are ever migrated and this decision
+stops applying), and a scan that fails the build on any
+`receiver.attribute is SomeEnum.MEMBER`. The scan allow-lists `scope.`, `self.`
+and `payload.` — those are coerced at the JWT boundary in `security/rbac.py` and
+by pydantic before a handler runs — and it has its own parametrised test proving
+it flags what it claims to. Same technique as the LLM chokepoint scan and the
+raw-HTML ban: make the careless form inexpressible rather than discouraged.
+
+**What it costs:** a rule a contributor has to know, enforced by a regex rather
+than by the type system. The regex is heuristic — it keys on attribute access,
+so `is` against a bare local is not flagged and would not be caught.
+
+### D-056 · Timeline legend wraps rather than sharing a row (defect found in Phase 6)
+
+At a 375px viewport the timeline heading and its rail legend, laid out with
+`justify-between`, were squeezed into two narrow columns whose wrapped lines
+interleaved into unreadable text. Fixed with `flex-wrap`. Noted here because it
+is the only rendering defect the mobile spot-check found, and because it is
+evidence for what that check is worth: the desktop layout it was designed at
+never showed it.
+
+### Deferred out of Phase 6
+
+* **Migrating enum columns to a real SQLAlchemy `Enum` type.** The structural
+  fix for D-055. Deferred on the final day for the scope reason above; it is the
+  first thing to do after submission.
+* **Rebuilding highlights for existing charts.** The fix stops duplicates being
+  created; it does not clean up a database seeded before it. `init_db.py --reset`
+  or `POST /patients/{id}/highlights/refresh` does. Acceptable because all data
+  here is synthetic and disposable; a real deployment would need a one-off
+  backfill.
+* **A formal accessibility audit.** Stated in the README as a known gap rather
+  than attempted badly in the last hours.

@@ -9,11 +9,16 @@ and server-enforced RBAC.
 > **Synthetic data only.** This is a prototype. It has never been connected to a
 > real medical record and must not be.
 
-**Build status: Phase 2 complete.** The product surface is built: longitudinal
-timeline, AI scribe pipeline, Glance View with provenance click-through,
-threaded collaboration, revision history with revert, and conflict handling.
-See [Current status](#current-status) for the honest list of what is and is not
-finished.
+**Build status: complete (Phases 0–6).** Longitudinal timeline, AI scribe
+pipeline, Glance View with provenance click-through, threaded collaboration,
+revision history with revert, conflict handling, adaptive importance, data
+decay, and ambient voice capture. See [Current status](#current-status) for the
+honest list of what is and is not finished — including the parts that are
+stubbed.
+
+**Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
+(3 pages, PDF alongside it) · [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (351 tests).
 
 ---
 
@@ -86,6 +91,8 @@ With the backend running:
 ```bash
 python scripts/phase1_smoke.py     # 29 checks — access control, over real HTTP
 python scripts/phase2_smoke.py     # 35 checks — the whole product surface
+python scripts/phase4_smoke.py     # adaptive importance + data decay
+python scripts/phase5_smoke.py     # 31 checks — ambient voice capture
 python scripts/bench_glance.py     # Glance View latency, measured not asserted
 ```
 
@@ -104,10 +111,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 334 tests
+pytest tests/ -v                  # from the repository root — 351 tests
 ```
 
-334 tests, all passing, no API key or network required. Roughly 24 seconds.
+351 tests, all passing, no API key or network required. Roughly 31 seconds.
 
 To run just the four files the brief names:
 
@@ -384,7 +391,7 @@ ATTRIBUTION.txt  dependencies and licenses
 | Ambient voice capture | Record in-browser, upload audio, or paste a transcript — all three produce a scribed entry |
 | Segment-level provenance | Every summary line links to the spoken segment behind it, with speaker, timestamp and confidence |
 | Installable PWA | Manifest + service worker; `/api` is never cached |
-| Latency | Measured: P95 **10.8–13.2 ms** server handling across runs, against a 300 ms budget |
+| Latency | Measured: P95 **13.3–15.9 ms** server handling across three runs, against a 300 ms budget |
 
 ### Partial or deliberately deferred
 
@@ -413,11 +420,15 @@ ATTRIBUTION.txt  dependencies and licenses
 - **Timeline pagination.** Correct at seed scale, wrong at real scale. Deferred
   with a measured reason: the Glance View P95 is ~11 ms at current depth.
 
-Phase 4 added no work to the Glance View read path — `services/glance.py` never
-calls the scorer or touches `FeatureWeight`; it reads scores precomputed on
-write. Re-measured after the phase across three runs: P95 **10.8 / 12.1 /
-13.2 ms**. The spread is container noise at this scale, not a regression, and
-the range is reported rather than the best run.
+Nothing added to the Glance View read path after Phase 2 — `services/glance.py`
+never calls the scorer or touches `FeatureWeight`; it reads scores precomputed
+on write. Re-measured on the final build across three runs: P95 **14.3 / 13.3 /
+15.9 ms**, against a 300 ms budget. That is a little above the 10.8–13.2 ms
+recorded after Phase 4; the chart is two entries deeper and the container was
+under different load. At roughly 5% of budget neither the spread nor the drift
+changes any conclusion, and the range is reported rather than the best run —
+quietly keeping the older, prettier number is exactly the sort of thing this
+README exists not to do.
 
 ### Known gaps, stated plainly
 
@@ -456,6 +467,17 @@ the range is reported rather than the best run.
 - **No consent model for patient-made recordings.** The clinician is a party to
   a recording made in the patient view and is never asked, and the clinical view
   shows no indicator that one exists.
+- **Enum columns are typed `String`, not `Enum`.** SQLAlchemy therefore returns
+  a plain `str` on load, so `is` comparisons against enum members are always
+  false. Three shipped that way and were live defects (D-055); they are fixed
+  and a source scan now fails the build on the pattern, but correctness here
+  rests on a regex rather than the type system. The column migration is the real
+  fix and is not done.
+- **No formal accessibility audit.** Colour is never the sole signal and
+  keyboard focus is visible, but no WCAG/contrast audit or screen-reader pass
+  has been run.
+- **Mobile is checked, not optimised.** One 375px spot-check per role, no
+  responsive redesign and no touch-target audit.
 - **Whether any of this actually helps is unmeasured.** Whether promoted content
   shortens a clinician's time-to-decision is the outcome the feature exists for
   and cannot be measured from inside the system. It needs instrumented users.
@@ -471,6 +493,21 @@ Not done: no formal WCAG or contrast audit has been run, no screen-reader pass,
 and the interface has not been tested with assistive technology. The colour
 choices are inherited from the Phase 0 token set and are plausible but
 unverified.
+
+### Mobile posture — checked, not optimised
+
+One spot-check at a 375px viewport in a real browser, for both the clinician and
+patient views. Result: `scrollWidth == clientWidth == 375`, no horizontally
+overflowing elements, both views usable — and one genuine defect, the timeline
+legend colliding with its heading and interleaving into unreadable text, fixed
+in D-056. Worth noting that the desktop layout it was designed at never showed
+it.
+
+What that claim does *not* cover: no responsive redesign, no touch-target size
+audit, no testing on a physical device, and no check of the voice recorder on
+mobile Safari specifically — which matters, because the PWA capture flow is the
+one feature most likely to be used on a phone. "Mobile-checked" here means the
+layout survives a narrow viewport, nothing stronger.
 
 ---
 
@@ -756,6 +793,9 @@ receipt it returns.
 | Acoustic diarisation | **Known gap** — speaker labels come from the transcript source |
 | Consent artefact on patient recordings | **Known gap** — the clinician is a party and is never asked |
 | Audio content scanning | **Known gap** — MIME and size checked; content not scanned or transcoded |
+| Enum comparison correctness | Implemented (guarded) — `==` throughout; a source scan fails the build on identity comparison against an ORM-loaded enum column (D-055) |
+| Enum columns typed `String`, not `Enum` | **Known gap** — the structural fix for D-055; correctness rests on a regex scan, not the type system |
+| Formal accessibility / WCAG audit | **Known gap** — colour is never the sole signal, but no audit was run |
 
 Full reasoning, including why content is deliberately **not** HTML-escaped
 before storage (clinical text contains `BP <120/80` and `dose <5mg`, and

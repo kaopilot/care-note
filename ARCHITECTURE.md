@@ -308,10 +308,18 @@ against a chart of 8 entries carrying 6 highlights, SQLite on local disk:
 
 | Segment | p50 | **p95** | p99 | max |
 |---|---|---|---|---|
-| Server handling (`X-Response-Time-Ms`) | 9.71 ms | **11.15 ms** | 12.89 ms | 43.57 ms |
-| In-process wall clock | 10.63 ms | 12.25 ms | 13.94 ms | 44.69 ms |
+| Server handling (`X-Response-Time-Ms`) | 10.96 ms | **14.26 ms** | 16.08 ms | 16.89 ms |
+| In-process wall clock | 11.94 ms | 15.74 ms | 17.68 ms | 18.49 ms |
 
-**P95 server handling: 11.15 ms, against a 300 ms budget.**
+**P95 server handling: 14.26 ms, against a 300 ms budget.**
+
+Re-measured in Phase 6 against the final build, three consecutive runs:
+P95 **14.26 / 13.30 / 15.94 ms**. The range is reported rather than the best
+run. It sits slightly above the 10.8–13.2 ms range recorded after Phase 4; the
+chart is two entries deeper and the container was under different load, and at
+roughly 5% of the budget neither the spread nor the drift changes any
+conclusion. Reported because quietly keeping the older, prettier number would
+be the kind of thing this document exists to not do.
 
 ### Method, and what the number excludes
 
@@ -388,6 +396,8 @@ Three statuses are used throughout, and they mean different things:
 | Comment isolation from patients | **Implemented** — refused at the route *and* stamped `is_internal` at write |
 | Scribe failure recovery | **Known gap** — synchronous pipeline; a crash mid-run loses the summary rather than leaving a retryable job (D-032) |
 | Redaction recall on unanticipated names | **Known gap** — gazetteer + patterns only; lowercase and transliterated names in running prose can survive (D-012) |
+| Enum comparison correctness | **Implemented (guarded)** — `==` throughout; a source scan fails the build on identity comparison against an ORM-loaded enum column (D-055) |
+| Enum columns typed as `String`, not `Enum` | **Known gap** — the structural fix for D-055. Reloaded values are plain `str`, so correctness rests on a regex scan rather than the type system |
 
 **The current build is not safe for real PHI as-is.** This is stated in the
 README as well as here, deliberately, so it cannot be missed by a reader who
@@ -846,3 +856,46 @@ The Glance View P95 figure in *Latency* above still stands. Capture is a write
 path, and a slow one (transcription plus summarisation), but it adds nothing to
 the read path being measured. The transcript panel is lazy-loaded on click and
 is not part of the Glance View render.
+
+
+---
+
+## Phase 6 — final verification
+
+No new components. This phase packaged the deliverables and ran the checks that
+only a finished build can be subjected to. Three of them found something.
+
+### The mobile spot-check
+
+One pass at a 375px viewport in a real browser, both roles. Result:
+`scrollWidth == clientWidth == 375` with zero horizontally overflowing elements,
+and one genuine defect — the timeline legend interleaving with its heading
+(D-056). Documented as **mobile-checked, not mobile-optimised**: the layout
+survives a narrow viewport and is usable, but no responsive redesign was done
+and no touch-target audit was run.
+
+### The log spot-check
+
+An entry and a comment were deliberately written containing a seeded patient
+name, an NRIC-format identifier and a phone number, then login, patient list,
+timeline, Glance View, entry create, comment create, scribe and highlight routes
+were all exercised against a running server. The log was then grepped for eight
+probe terms spanning names, identifiers, MRN, comment body text and summary
+prose. **Zero hits.** What the log does carry is one JSON line per action with
+actor id, action, target type/id, clinic id, timestamp, and scalar counts
+(`{'returned': 7}`, `{'highlights': 6}`, `{'redactions': 4}`). The
+`llm.request` line records `prompt_chars` as a number and no prompt.
+
+### The screenshot that found a defect no test did
+
+The duplicate-highlight bug (D-055) was live through 334 passing tests and was
+found by looking at the Glance View. The tests asserted that highlights resolve,
+that provenance points at real spans, that scoring shifts with learning — all
+true of a duplicated row. None asserted *how many* rows came back, because
+nobody thought to. The regression suite now does.
+
+This is worth stating plainly in a document that spends a lot of words on
+structural enforcement: source scans and fused dependencies catch the classes of
+error they were designed for, and this one walked past all of them. Looking at
+the product remains a distinct verification method, not a formality once the
+tests are green.
