@@ -75,7 +75,12 @@ export default function Timeline({
 
   return (
     <section className="mt-5">
-      <div className="flex items-baseline justify-between">
+      {/* flex-wrap, not a plain justify-between row: at ~375px the title and
+          the legend were squeezed into two narrow columns and their wrapped
+          lines interleaved into unreadable text ("newest Solid rail = written
+          by a first, allperson · ..."). Wrapping drops the legend onto its own
+          line instead. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <SectionTitle count={entries.length} hint="newest first, all sources">
           Longitudinal timeline
         </SectionTitle>
