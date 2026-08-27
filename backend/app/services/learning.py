@@ -259,8 +259,25 @@ def recompute_tags(
     evidence = _accumulate(rows, now=now or _now(), only_tags=wanted)
     result: dict[str, float] = {}
     for tag in wanted:
-        row = _upsert(db, clinic_id, tag, evidence.get(tag, TagEvidence()))
-        result[tag] = row.weight
+        tag_evidence = evidence.get(tag)
+        if tag_evidence is None:
+            # No learning-eligible evidence exists for this tag. Writing a 0.0
+            # row would put it on the transparency surface as something the
+            # clinic has an opinion about, which is the opposite of true — and
+            # would make `rebuild_clinic`, which deletes such rows, disagree
+            # with this path about what the table should contain.
+            stale = (
+                db.query(FeatureWeight)
+                .filter(
+                    FeatureWeight.clinic_id == clinic_id,
+                    FeatureWeight.feature_tag == tag,
+                )
+                .first()
+            )
+            if stale is not None:
+                db.delete(stale)
+            continue
+        result[tag] = _upsert(db, clinic_id, tag, tag_evidence).weight
     db.flush()
     return result
 

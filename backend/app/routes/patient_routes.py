@@ -342,12 +342,16 @@ def create_entry(
     # Glance View has a 300ms P95 budget and this is the work that would
     # otherwise land inside it.
     highlights.refresh_entry_highlights(scope.db, entry)
+    # CREATE, not EDIT. Phase 4 found that logging authorship as an engagement
+    # signal would have taught the ranking "whatever this clinic writes about
+    # most", which is volume rather than attention — so this row is recorded for
+    # the behavioural history and carries weight 0.0 in learning (D-039).
     record_interaction(
         scope.db,
         user_id=scope.user_id,
         user_role=scope.role,
         clinic_id=scope.clinic_id,
-        action=InteractionAction.EDIT,
+        action=InteractionAction.CREATE,
         target_type="entry",
         target_id=entry.id,
         tags=features.entry_level_tags(entry.type, entry.risk_level)

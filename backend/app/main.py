@@ -16,6 +16,7 @@ from app.routes import (
     entry_routes,
     glance_routes,
     highlight_routes,
+    learning_routes,
     patient_routes,
 )
 
@@ -48,6 +49,7 @@ app.include_router(entry_routes.router)
 app.include_router(comment_routes.router)
 app.include_router(highlight_routes.router)
 app.include_router(glance_routes.router)
+app.include_router(learning_routes.router)
 # Phase 0's throwaway routes. Kept for now: tests/test_rbac_pattern.py still
 # proves the enforcement pattern against them independently of any feature.
 # Phase 3 folds those assertions into the real-route suite and deletes these.
@@ -78,4 +80,4 @@ def on_startup() -> None:
 
 @app.get("/health", tags=["meta"])
 def health() -> dict:
-    return {"status": "ok", "service": "care-note", "phase": "2"}
+    return {"status": "ok", "service": "care-note", "phase": "4"}

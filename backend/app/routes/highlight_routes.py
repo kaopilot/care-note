@@ -235,6 +235,7 @@ def _decide(
     )
     # The strongest signal Phase 4 gets: a clinician looked at a specific
     # suggestion and said yes or no. Accept reinforces the tags, reject dampens.
+    # record_interaction() folds this into FeatureWeight before it returns.
     record_interaction(
         scope.db,
         user_id=scope.user_id,
@@ -248,6 +249,15 @@ def _decide(
         target_type="highlight",
         target_id=highlight.id,
         tags=highlight_service.decode_tags(highlight.feature_tags),
+    )
+    # Weights just moved, so every other highlight for this patient is now
+    # scored against stale numbers. Rescoring here rather than on read keeps the
+    # Glance View's 300ms budget intact, and it is what makes the learning
+    # visible in the same breath as the click: confirming one warfarin
+    # suggestion lifts the other warfarin content on the card immediately,
+    # rather than at some later write nobody connects to the decision.
+    highlight_service.refresh_patient_highlights(
+        scope.db, highlight.patient_id, scope.clinic_id
     )
     scope.db.commit()
     scope.db.refresh(highlight)
@@ -326,6 +336,11 @@ def create_manual_highlight(
         target_type="entry",
         target_id=entry.id,
         tags=highlight_service.decode_tags(highlight.feature_tags),
+    )
+    # A hand-marked phrase is the strongest evidence the learner gets, so the
+    # rest of the chart is rescored against the weights it just moved.
+    highlight_service.refresh_patient_highlights(
+        scope.db, entry.patient_id, scope.clinic_id
     )
     scope.db.commit()
     scope.db.refresh(highlight)
