@@ -86,9 +86,17 @@ class DecayState(StrEnum):
 
 
 class InteractionAction(StrEnum):
-    """Signals that feed Phase 4 self-learning."""
+    """Signals that feed Phase 4 self-learning.
+
+    Recorded is not the same as learned-from. `CREATE` and `VIEW` are written to
+    `InteractionLog` for a complete behavioural history but carry weight 0.0 in
+    `services/learning.py` — see D-039. Authoring a note is volume, and opening
+    a chart is unavoidable; neither is evidence that a clinician stopped and
+    paid attention to something.
+    """
 
     VIEW = "view"
+    CREATE = "create"
     EDIT = "edit"
     COMMENT = "comment"
     MANUAL_HIGHLIGHT = "manual_highlight"
