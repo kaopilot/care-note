@@ -111,6 +111,48 @@ _NON_NAME_TOKENS = {
 }
 
 
+# Titles and connectors that appear INSIDE a stored display name ("Dr Lim",
+# "Nurse Priya", "Nurul binti Hassan"). When a full name is split into its
+# parts for matching, these are not parts — redacting the word "Nurse" would
+# mangle every sentence in a nurse consult.
+_NAME_AFFIXES = {
+    "dr", "doctor", "mr", "mrs", "ms", "miss", "mdm", "madam", "prof", "sr",
+    "nurse", "sister", "encik", "puan", "cik",
+    "bin", "binti", "a/l", "a/p", "s/o", "d/o", "van", "de", "del", "al",
+}
+
+
+def expand_name_parts(names: set[str]) -> set[str]:
+    """Full names plus the individual parts people are actually called by.
+
+    A gazetteer of display names alone only ever matches the formal form. Real
+    consult speech says "Hi Amira" and "Rahman is here for his review", and
+    those are the mentions a name detector most needs to catch — the formal
+    "Amira Rahman" is also the one the honorific and label patterns already
+    handle. Without this expansion the gazetteer's whole reason for existing
+    goes unmet, which is precisely the defect Phase 5 found (DECISIONS.md
+    D-050).
+
+    Titles and connectors are excluded, and so is anything already known not to
+    be a name, so "Dr Lim" contributes "Lim" and not "Dr".
+    """
+    expanded: set[str] = set()
+    for name in names:
+        if not name:
+            continue
+        expanded.add(name)
+        for part in re.split(r"[\s,]+", name):
+            token = part.strip(".'’-")
+            if len(token) < 2:
+                continue
+            if token.lower() in _NAME_AFFIXES:
+                continue
+            if token in _NON_NAME_TOKENS:
+                continue
+            expanded.add(token)
+    return expanded
+
+
 @dataclass
 class RedactionResult:
     """Full accounting of one redaction pass — used for audit and tests."""
@@ -129,7 +171,10 @@ class RedactionResult:
 
 class _Redactor:
     def __init__(self, gazetteer: set[str] | None = None) -> None:
-        self.gazetteer = {g for g in (gazetteer or set()) if g}
+        # Expanded HERE rather than at each call site. Every caller that knows
+        # the names in scope gets bare-first-name matching automatically, and
+        # no future caller can forget to ask for it.
+        self.gazetteer = expand_name_parts({g for g in (gazetteer or set()) if g})
         self._counters: dict[str, int] = {}
         self._seen: dict[str, str] = {}  # original value -> placeholder (per pass)
         self.by_category: dict[str, int] = {}
