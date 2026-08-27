@@ -19,7 +19,7 @@
 import { shortDate } from '../lib/format'
 import { EmptyState } from './Primitives'
 
-export default function PatientHome({ care, timing, onRunSession, sessionBusy }) {
+export default function PatientHome({ care, timing, onRunSession, sessionBusy, voiceCapture }) {
   const labels = care.labels || {}
 
   return (
@@ -127,6 +127,11 @@ export default function PatientHome({ care, timing, onRunSession, sessionBusy })
           Runs a short question-and-answer session and writes a summary for your care team.
           Your name and contact details are removed before anything is processed.
         </p>
+
+        {/* Voice capture, patient side. Deliberately placed under "What you
+            told us" rather than given its own section: to the patient this is
+            another way of telling their care team something, not a feature. */}
+        {voiceCapture && <div className="mt-3">{voiceCapture}</div>}
       </section>
 
       {timing && (

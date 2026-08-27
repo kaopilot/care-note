@@ -25,10 +25,17 @@ export class ApiError extends Error {
 
 async function request(path, options = {}) {
   const started = performance.now()
+  // FormData must NOT get an explicit Content-Type: the browser has to set it
+  // itself so it can append the multipart boundary. Setting it by hand here
+  // produces a body the server cannot parse.
+  const isForm = options.body instanceof FormData
   const response = await fetch(`/api${path}`, {
     ...options,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
+      ...(options.headers || {}),
+    },
   })
   const clientMs = performance.now() - started
   const serverMs = Number(response.headers.get('X-Response-Time-Ms') || 0)
@@ -100,6 +107,15 @@ export const Api = {
   runDecay: (dryRun = true) => api(`/clinic/decay/run?dry_run=${dryRun}`, { method: 'POST' }),
   restoreEntry: (entryId) => api(`/entries/${entryId}/restore`, { method: 'POST' }),
   entryArchive: (entryId) => api(`/entries/${entryId}/archive`),
+
+  // Phase 5 — ambient consult capture. `form` is a FormData carrying either an
+  // audio blob or transcript text; the server decides the entry type from the
+  // caller's role, so nothing here names one.
+  capture: (patientId, form) =>
+    api(`/patients/${patientId}/capture`, { method: 'POST', body: form }),
+  captures: (patientId) => api(`/patients/${patientId}/captures`),
+  capture_detail: (sessionId) => api(`/captures/${sessionId}`),
+  attribution: (entryId) => api(`/entries/${entryId}/attribution`),
 
   scribeTemplates: () => api('/scribe/templates'),
   runScribe: (patientId, interactionType) =>

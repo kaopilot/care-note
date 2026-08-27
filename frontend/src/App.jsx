@@ -21,6 +21,7 @@ import { Api, ApiError } from './lib/api'
 import GlanceView from './components/GlanceView'
 import PatientHome from './components/PatientHome'
 import Timeline from './components/Timeline'
+import VoiceCapture from './components/VoiceCapture'
 import { Button, Chip } from './components/Primitives'
 import { roleLabel } from './lib/format'
 
@@ -251,6 +252,14 @@ function Workspace({ session, onSignOut }) {
               timing={timing}
               sessionBusy={Boolean(processing)}
               onRunSession={() => runScribe('ai_patient_session')}
+              voiceCapture={
+                <VoiceCapture
+                  patientId={selected}
+                  kind="patient"
+                  disabled={Boolean(processing)}
+                  onCaptured={() => load(selected)}
+                />
+              }
             />
           </div>
         )
@@ -316,6 +325,17 @@ function Workspace({ session, onSignOut }) {
                       ))}
                     </div>
                   </div>
+                )}
+                {/* Live capture is a clinical-view affordance; the server
+                    refuses a clinical capture from a patient login and a
+                    patient capture from this one. Admin authors nothing. */}
+                {session.role !== 'admin' && (
+                  <VoiceCapture
+                    patientId={selected}
+                    kind="clinical"
+                    disabled={Boolean(processing) || !patient}
+                    onCaptured={() => load(selected)}
+                  />
                 )}
               </div>
             }

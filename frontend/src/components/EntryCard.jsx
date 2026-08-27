@@ -20,6 +20,7 @@ import { Api } from '../lib/api'
 import { ROLE_ACCENT, entryLabel, relativeAge, roleLabel, shortDateTime } from '../lib/format'
 import Comments from './Comments'
 import VersionHistory from './VersionHistory'
+import { TranscriptToggle } from './TranscriptPanel'
 import {
   Button,
   Chip,
@@ -249,6 +250,9 @@ export default function EntryCard({
         <Button onClick={() => setOpen(open === 'history' ? null : 'history')}>
           History <span className="ml-1 font-mono text-[10px] text-slate-500">v{entry.version_number}</span>
         </Button>
+        {/* Only renders for AI-scribed entries that have a stored session —
+            a note scribed from a fixture has no captured audio behind it. */}
+        {canComment && <TranscriptToggle entry={entry} />}
         {entry.editable_by_me && (
           <Button
             onClick={() => {
