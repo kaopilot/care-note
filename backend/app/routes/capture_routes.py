@@ -318,27 +318,35 @@ def list_captures(
 def get_capture(
     session_id: str, scope: AccessScope = Depends(require_access(*TRANSCRIPT_ROLES))
 ) -> dict[str, Any]:
-    """The capture, and the speaker-labelled transcript behind it.
+    """The speaker-labelled transcript behind an AI-scribed note.
+
+    Keyed on the SEGMENTS, not on the capture row. Every AI-scribed note has a
+    transcript behind it — the Phase 2 fixture path writes segments exactly the
+    same way voice capture does — but only a recording has a `CaptureSession`
+    with a duration, a recogniser and a byte count. Requiring the capture row
+    would have made this endpoint report "no transcript" for notes whose
+    transcript is sitting right there.
 
     Patient logins are refused by the dependency, including for their own
-    recording (D-049): a consult recording made in the patient view still
-    contains the clinician's half of the conversation.
+    recording (D-049): a consult recorded in the patient view still contains
+    the clinician's half of the conversation.
     """
-    row = (
-        scope.query(CaptureSession)
-        .filter(CaptureSession.session_id == session_id)
-        .first()
-    )
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Capture not found"
-        )
-
     segments = (
         scope.query(TranscriptSegment)
         .filter(TranscriptSegment.session_id == session_id)
         .order_by(TranscriptSegment.sequence)
         .all()
+    )
+    if not segments:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcript is stored for this session",
+        )
+
+    row = (
+        scope.query(CaptureSession)
+        .filter(CaptureSession.session_id == session_id)
+        .first()
     )
 
     previous_end = 0
@@ -371,17 +379,23 @@ def get_capture(
         clinic_id=scope.clinic_id,
         metadata={"role": str(scope.role), "segments": len(out)},
     )
+
+    simulated = bool(row and row.transcription_simulated)
     return {
-        "capture": _capture_out(row).model_dump(),
+        # Null for a fixture-generated session: there was no recording, so
+        # there is no recording to describe. The client renders the transcript
+        # either way and simply omits the capture header.
+        "capture": _capture_out(row).model_dump() if row else None,
         "segments": [segment.model_dump() for segment in out],
         # Said in the payload, not only in the docs, because this is the fact a
         # reviewer most needs and is least able to verify from the outside.
         "notice": (
-            "Segments are stored already redacted. The audio was not retained."
+            "Segments are stored already redacted."
+            + (" The audio was not retained." if row else "")
             + (
                 " This transcript was produced by a simulated recogniser, not by "
                 "speech recognition."
-                if row.transcription_simulated
+                if simulated
                 else ""
             )
         ),

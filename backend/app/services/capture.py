@@ -39,8 +39,8 @@ from app.ai import asr_client
 from app.core.audit_logging import log_event
 from app.core.enums import CaptureKind, CaptureSource, InteractionType, Role
 from app.core.sanitization import ContentTooLongError, prepare_content
-from app.models import CaptureSession, Entry, Patient
-from app.services import attribution, scribe
+from app.models import CaptureSession, Entry, Patient, SummaryAttribution
+from app.services import scribe
 from app.services.transcripts import Turn
 
 # Confidence below which a segment is called out for checking. Same threshold as
@@ -412,7 +412,13 @@ def run_capture(
     ai_note = entry.ai_note
     capture.redaction_count = getattr(ai_note, "redaction_count", 0) or 0
 
-    links = attribution.link_summary_to_segments(db, entry=entry, session_id=session_id)
+    # Attribution already ran inside run_scribe, which is the one place an
+    # AI-scribed note gets its provenance. Counted here only for the log.
+    link_count = (
+        db.query(SummaryAttribution)
+        .filter(SummaryAttribution.entry_id == entry.id)
+        .count()
+    )
     db.commit()
     db.refresh(entry)
     db.refresh(capture)
@@ -435,7 +441,7 @@ def run_capture(
             "simulated": simulated,
             "audio_bytes": audio_bytes,
             "audio_retained": False,
-            "attributions": len(links),
+            "attributions": link_count,
             "injection_markers": len(markers),
         },
     )

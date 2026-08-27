@@ -596,6 +596,43 @@ def test_script_payload_in_a_transcript_is_stored_as_literal_text(
     assert "<script>alert('x')</script>" in segment.redacted_text
 
 
+def test_fixture_scribed_notes_also_get_transcript_and_attribution(
+    client_p1, clinician
+):
+    """The Phase 2 scribe path writes segments the same way capture does, so it
+    gets the same line-level provenance — the transcript endpoint is keyed on
+    the segments, not on a CaptureSession that only a recording has.
+    """
+    response = client_p1.post(
+        "/patients/patient-a1/scribe",
+        json={"interaction_type": "doctor_patient_consult"},
+        headers=clinician,
+    )
+    assert response.status_code == 201, response.text
+    entry = response.json()
+    session_id = entry["ai_session_id"]
+
+    detail = client_p1.get(f"/captures/{session_id}", headers=clinician)
+    assert detail.status_code == 200
+    body = detail.json()
+    # No recording happened, so there is no recording to describe...
+    assert body["capture"] is None
+    assert "audio" not in body["notice"].lower()
+    # ...but the transcript and its provenance are fully there.
+    assert body["segments"]
+
+    links = client_p1.get(
+        f"/entries/{entry['id']}/attribution", headers=clinician
+    ).json()
+    assert links
+    assert all(link["resolves"] for link in links)
+
+
+def test_transcript_endpoint_404s_for_an_unknown_session(client_p1, clinician):
+    response = client_p1.get("/captures/sess-nope", headers=clinician)
+    assert response.status_code == 404
+
+
 def test_attribution_rows_are_scoped_to_the_entry_version(client_p1, clinician, seeded_p1):
     """Offsets belong to the version they were computed against."""
     entry_id = post_audio(client_p1, clinician).json()["entry"]["id"]

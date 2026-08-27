@@ -54,7 +54,7 @@ from app.core.enums import EntryType, InteractionType, RiskLevel, Role
 from app.core.provenance import session_pointer
 from app.core.sanitization import prepare_content
 from app.models import AIScribedNote, AuditLog, Entry, Patient, TranscriptSegment, User, Version
-from app.services import features, highlights, transcripts
+from app.services import attribution, features, highlights, transcripts
 from app.services.transcripts import Turn
 
 SUMMARY_TYPE: dict[InteractionType, EntryType] = {
@@ -389,6 +389,12 @@ def run_scribe(
 
     highlights.refresh_entry_highlights(db, entry)
 
+    # Line-level provenance, for every AI-scribed note rather than only for
+    # voice captures. The segments are already here and the matching is the
+    # same work, so the Phase 2 fixture path gets "which spoken line produced
+    # this bullet" for free (Phase 5; see services/attribution.py).
+    links = attribution.link_summary_to_segments(db, entry=entry, session_id=session_id)
+
     log_event(
         actor_id=actor_id,
         action="entry.ai_scribe",
@@ -401,6 +407,7 @@ def run_scribe(
             "redactions": redaction_count,
             "segments": len(turns),
             "confidence": confidence,
+            "attributed_lines": len(links),
         },
     )
     db.commit()
