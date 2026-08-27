@@ -38,6 +38,11 @@ npm run dev                                           # http://localhost:5173
 
 Interactive API docs: <http://localhost:8000/docs>
 
+> **Upgrading from an earlier checkout?** Phase 4 added the
+> `Entry.decay_hold_until` column, and there is no migration framework (D-001 —
+> SQLite, no Alembic). `python init_db.py --reset` is required; without it
+> queries against `entries` will fail on the missing column.
+
 ### Seeded logins
 
 All accounts use the password `carenote-demo`. Two clinics exist so that
@@ -99,10 +104,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 256 tests
+pytest tests/ -v                  # from the repository root — 297 tests
 ```
 
-256 tests, all passing, no API key or network required. Roughly 20 seconds.
+297 tests, all passing, no API key or network required. Roughly 24 seconds.
 
 To run just the four files the brief names:
 
@@ -111,6 +116,7 @@ pytest tests/test_rbac_scope.py -v            # role + clinic enforcement
 pytest tests/test_revision_history.py -v      # versions, revert, audit trail
 pytest tests/test_highlight_provenance.py -v  # every pointer resolves
 pytest tests/test_concurrent_edits.py -v      # parallel edits, deterministic conflicts
+pytest tests/test_self_learning_importance.py -v   # BONUS — adaptive prioritisation
 ```
 
 Or by area:
@@ -120,6 +126,7 @@ pytest tests/ -v -k rbac          # the Phase 0 enforcement-pattern tests
 pytest tests/ -v -k phase1        # the walking-skeleton proofs
 pytest tests/ -v -k phase2        # the Phase 2 product-surface tests
 pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
+pytest tests/test_self_learning_importance.py tests/test_data_decay.py -v  # Phase 4 bonuses
 ```
 
 ⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
@@ -144,6 +151,16 @@ mistaken for coverage.
 | Drop the span fragment from highlight pointers | 3 in `test_highlight_provenance.py` |
 | Disable the D-037 conflict guard | 3 in `test_concurrent_edits.py` |
 | Last-write-wins instead of optimistic locking | 4 in `test_concurrent_edits.py` |
+| Make the learned term always return 0.0 | 4 in `test_self_learning_importance.py` |
+| Remove the `NEVER_DAMPENED` safety floor | 1 in `test_self_learning_importance.py` |
+| Let `CREATE` train the ranking | 1 in `test_self_learning_importance.py` |
+| Drop the clinic filter from the evidence read | 1 in `test_self_learning_importance.py` |
+| Remove evidence time-decay | 1 in `test_self_learning_importance.py` |
+| Remove weight saturation (unbounded learning) | 1 in `test_self_learning_importance.py` |
+| Resolve provenance against compressed content | 1 in `test_data_decay.py` |
+| Disable the decay protection rules | 5 in `test_data_decay.py` |
+| Exclude cold entries from scoring entirely | 1 in `test_data_decay.py` |
+| Truncate instead of extracting when summarising | 1 in `test_data_decay.py` |
 
 | File | Covers |
 |---|---|
@@ -160,6 +177,8 @@ mistaken for coverage.
 | `tests/test_provenance.py` | Pointer grammar, resolution, cross-clinic refusal |
 | `tests/test_sanitization.py` | Content safety; scans the frontend for raw-HTML sinks |
 | `tests/test_phase2_core.py` | Scribe redaction, Glance View contents, staleness, conflict rule |
+| `tests/test_self_learning_importance.py` | **Required (bonus).** Adaptive prioritisation end to end, its boundaries, and what it refuses to learn |
+| `tests/test_data_decay.py` | Reversible compression, protection rules, provenance survival across the decay boundary |
 
 ### What the required tests found
 
@@ -288,19 +307,22 @@ backend/
     security/   rbac.py (enforcement) · policy.py (rules) · auth.py (JWT)
     ai/         redaction.py (chokepoint) · llm_client.py (only LLM egress)
     routes/     auth · patients · entries · comments · highlights · glance
+                learning (learned weights + decay lifecycle)
                 schemas.py (one entry wire format, used by every route)
     services/   features (clinical vocabulary) · scoring (importance)
                 highlights (lifecycle) · glance (Top Card) · scribe (AI pipeline)
                 transcripts (synthetic fixtures) · interactions (learning signal)
+                learning (behaviour → weights) · decay (hot/warm/cold lifecycle)
     models.py   full SQLAlchemy schema
   init_db.py    create tables + seed synthetic fixture
 frontend/
   src/
     lib/          api.js (one fetch wrapper) · format.js (display vocabulary)
     components/   GlanceView · Timeline · EntryCard · Comments
-                  VersionHistory · PatientHome · Primitives
+                  VersionHistory · PatientHome · LearningPanel · Primitives
     App.jsx       shell: session, patient switching, provenance jump-to
-scripts/        phase1_smoke · phase2_smoke · bench_glance
+scripts/        phase1_smoke · phase2_smoke · phase4_smoke · bench_glance
+                run_decay (the nightly decay job, as an explicit script)
 tests/
 docs/
 ARCHITECTURE.md  stack reasoning, component diagram, enforcement, security posture
@@ -329,20 +351,28 @@ ATTRIBUTION.txt  dependencies and licenses
 | Concurrency | Optimistic locking; stale writes refused with 409 carrying current state |
 | Conflict handling | Clinician precedence **and** a visible flag; disputed content never deleted |
 | Patient view | Plain language, calmer register, no scores or clinical shorthand |
-| Latency | Measured: P95 **11.15 ms** server handling against a 300 ms budget |
+| Self-learning importance | Clinician behaviour adapts the ranking; bounded, clinic-scoped, inspectable, and floored on safety vocabulary |
+| Data decay | hot → warm → cold with byte-exact reversible compression and protection rules |
+| Latency | Measured: P95 **10.8–13.2 ms** server handling across runs, against a 300 ms budget |
 
 ### Partial or deliberately deferred
 
-- **Self-learning importance (Phase 4).** The scoring function has a `learned`
-  term that reads `FeatureWeight` and returns 0.0 because nothing writes to that
-  table yet. `InteractionLog` rows **are** being written now — every manual
-  highlight, edit, comment, accept and reject records the feature tags of what
-  was touched — so Phase 4 starts with real behavioural history rather than an
-  empty table. Today's ranking is purely rule-based, and the UI says so by
-  showing the score breakdown.
-- **Data decay (Phase 4).** `DecayState` and `EntryArchive` are modelled and the
-  scoring path already applies a decay multiplier. Nothing transitions entries
-  between states yet.
+- **Self-learning per-user normalisation.** One enthusiastic clinician currently
+  counts the same as consensus across a practice. Weight saturation bounds the
+  damage and that bound is asserted, but signals should be normalised per user
+  before aggregation at real volume.
+- **Learning rescore scope.** Weights are clinic-wide; rescoring fires
+  per-patient on the write path. A patient nobody has touched keeps stale scores
+  until their chart is written to or an admin runs
+  `POST /clinic/learning/rebuild` — a nightly job in production. The alternative,
+  rescoring an entire clinic on every click, is unbounded work on a hot path.
+- **Decay of `Version` snapshots.** Cold compresses `Entry.content` only; the
+  version chain still holds every full snapshot. Compression here is a hot-row
+  optimisation, not true storage reduction — see the honest byte accounting
+  below.
+- **Decay scheduling.** No cron and no background worker. `scripts/run_decay.py`
+  and the admin endpoint are explicit triggers. A prototype that silently
+  rewrote clinical text on a timer would be harder to reason about.
 - **Voice capture (Phase 5).** Not started. The scribe pipeline already consumes
   turn-structured input with speaker labels and timings, so the transcription
   source can be swapped without changing anything downstream.
@@ -356,6 +386,12 @@ ATTRIBUTION.txt  dependencies and licenses
   polish paid for in infrastructure.
 - **Timeline pagination.** Correct at seed scale, wrong at real scale. Deferred
   with a measured reason: the Glance View P95 is ~11 ms at current depth.
+
+Phase 4 added no work to the Glance View read path — `services/glance.py` never
+calls the scorer or touches `FeatureWeight`; it reads scores precomputed on
+write. Re-measured after the phase across three runs: P95 **10.8 / 12.1 /
+13.2 ms**. The spread is container noise at this scale, not a regression, and
+the range is reported rather than the best run.
 
 ### Known gaps, stated plainly
 
@@ -376,6 +412,16 @@ ATTRIBUTION.txt  dependencies and licenses
   watchlist scores as ordinary prose — a recall gap, not a safety gap: an
   unrecognised term is simply not promoted, and the entry still sits in the
   timeline for a human to read.
+- **The learning loop has never seen more than one clinician's behaviour.** The
+  seeded history is a single synthetic cohort, so disagreement between two
+  clinicians in the same clinic is untested behaviour rather than designed
+  behaviour.
+- **`InteractionLog` tag matching is an unindexed scan.** One per write path.
+  The normalised join table that fixes it is specified in `SCHEMA.md` and not
+  built.
+- **Whether any of this actually helps is unmeasured.** Whether promoted content
+  shortens a clinician's time-to-decision is the outcome the feature exists for
+  and cannot be measured from inside the system. It needs instrumented users.
 
 ### Accessibility posture
 
@@ -388,6 +434,95 @@ Not done: no formal WCAG or contrast audit has been run, no screen-reader pass,
 and the interface has not been tested with assistive technology. The colour
 choices are inherited from the Phase 0 token set and are plausible but
 unverified.
+
+---
+
+## Adaptive importance and data decay
+
+Two bonus tracks from the brief, both built rather than described.
+
+### What the ranking learns, and from what
+
+Every time a clinician or staff member highlights a phrase, confirms or dismisses
+a suggestion, comments, or edits, the system records the **feature tags** of what
+they touched — `med:warfarin`, `symptom:bleeding` — never the prose. Those tags
+aggregate into a weight per clinic, which nudges how similar content ranks on
+future Glance Views.
+
+```
+InteractionLog  →  time-decayed evidence  →  FeatureWeight  →  Glance View score
+   (tags only)         (90-day half-life)      (−1 … +1)        (capped at 25%)
+```
+
+The seeded demo clinic shows all three behaviours at once. Open the Glance View
+as `clinician_a` and expand **"What this clinic pays attention to"**:
+
+| Tag | Weight | What it means |
+|---|---|---|
+| `med:warfarin` | **+0.36** | confirmed and hand-highlighted repeatedly — this clinic runs an anticoagulation service and the ranking has noticed |
+| `finding:bp_elevated` | **−0.39** | dismissed three times — routine BP is handled by a nurse-led pathway here and does not belong on a doctor's top card |
+| `entity:allergy` | **+0.00**, from 2 dismissals | recorded honestly, deliberately not acted on |
+
+That last row is the design, not a bug. See *What it refuses to learn* below.
+
+**Where to look in the code:** `backend/app/services/learning.py` is the whole
+loop. `record_interaction()` in `services/interactions.py` calls it, so a signal
+cannot be logged without the learner seeing it.
+
+### What it refuses to learn
+
+| Guarantee | Where |
+|---|---|
+| Cannot invent a highlight, only reorder ones a rule already justified | `highlights.refresh_entry_highlights` rule 1 runs before scoring |
+| Cannot exceed 25% of the score, however many times reinforced | weights saturate in (−1, 1) × `W_LEARNED` |
+| Cannot be trained to suppress allergy, anaphylaxis, sepsis, critical risk or self-harm content | `learning.NEVER_DAMPENED` — floored at zero (D-041) |
+| Cannot cross a clinic boundary | scoped on the evidence read *and* the weight write |
+| Cannot be trained by patients, or by authoring volume | role filter; `CREATE` and `VIEW` weighted 0.0 (D-039) |
+| Cannot drift from its evidence | `FeatureWeight` is a materialised view over `InteractionLog`; rebuild must reproduce it exactly |
+
+### Data decay
+
+Entries age `hot → warm → cold`. Cold replaces `Entry.content` with an
+**extractive** summary — real sentences by the original author, never
+paraphrased — and compresses the original into `EntryArchive`, recoverable byte
+for byte.
+
+```bash
+python scripts/run_decay.py --clinic clinic-a            # preview; changes nothing
+python scripts/run_decay.py --clinic clinic-a --apply    # actually compress
+```
+
+Preview is the default, and applying is admin-only. This is the only operation in
+the system that rewrites stored clinical text.
+
+**Nothing that still matters is compressed.** An entry is held at `warm` forever
+if it has an unresolved task, an open comment, a clinician-confirmed highlight, a
+flagged conflict, high/critical risk, or safety-critical content. The seed shows
+both halves: `entry-a1-hist-2026` (201 days) is compressed, while
+`entry-a1-hist-2025` (498 days) is held because it documents a penicillin
+allergy. Old does not mean settled.
+
+**Honest byte accounting.** On the seeded note:
+
+| Measure | Bytes |
+|---|---|
+| `Entry.content` before → after | 455 → 64 |
+| `EntryArchive` cost | +376 |
+| **Net storage delta** | **−15** |
+
+Base64 inflates zlib's output by about a third, so at these note lengths the
+archive eats nearly the whole saving. What compression genuinely buys is a **7×
+smaller hot row** — what a timeline load actually reads. Total storage turns
+meaningfully positive on notes of a few KB. `decay.run()` reports the read-path
+and archive figures separately rather than netting them into one flattering
+number (D-044).
+
+**Provenance survives it.** Span pointers index the entry's full text, so
+compressing content would move every offset onto different words — or overrun the
+end and report a dangling pointer for a valid highlight. `provenance.resolve()`
+reads through `decay.original_content()`, which returns the archive for cold
+entries. `scripts/phase4_smoke.py` confirms all 37 seeded pointers still resolve
+after a decay pass.
 
 ---
 
@@ -413,6 +548,14 @@ unverified.
 | Provenance as reference, not authority | Implemented — pointer resolution is clinic-scoped |
 | Scribe failure recovery | **Known gap** — synchronous; a crash mid-run loses the summary |
 | Redaction recall on unanticipated names | **Known gap** — patterns + gazetteer only |
+| Learning substrate contains no prose | Implemented — tags and counts only; asserted to leak no patient text |
+| Learned weights partitioned per clinic | Implemented — scoped on evidence read *and* weight write |
+| Safety vocabulary cannot be trained into silence | Implemented — floored at zero, dismissals still shown (D-041) |
+| Archived content recoverable | Implemented — byte-exact round trip asserted |
+| Archive endpoint returns metadata only | Implemented — reading an original is an audited restore |
+| Applying data decay | Implemented — admin-only, `dry_run` by default |
+| Per-user normalisation of learning signals | **Known gap** — one enthusiast counts as consensus |
+| `Version` snapshots not compressed by decay | **Known gap** — cold is a hot-row optimisation only |
 
 Full reasoning, including why content is deliberately **not** HTML-escaped
 before storage (clinical text contains `BP <120/80` and `dose <5mg`, and

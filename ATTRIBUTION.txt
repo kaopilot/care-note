@@ -6,7 +6,7 @@ Maintenance rule: append here THE MOMENT a dependency is added, in the phase
 that adds it. Do not reconstruct this file from requirements.txt at the end —
 that is how things get missed.
 
-Last updated: Phase 1 (2026-08-26)
+Last updated: Phase 4 (2026-08-27)
 
 PHASE 1 ADDED NO DEPENDENCIES. The walking skeleton was built entirely on the
 Phase 0 stack: FastAPI routing, SQLAlchemy queries, pydantic models, React
@@ -88,6 +88,38 @@ Specifically:
   * No charting, date, state-management or component library was added.
 
 
+PHASE 3 — NO NEW DEPENDENCIES
+-----------------------------
+The four brief-named test files use pytest and the Python standard library
+(threading and concurrent.futures for the genuine-parallelism tests in
+test_concurrent_edits.py). No mocking, factory, or property-testing library was
+added.
+
+
+PHASE 4 — NO NEW DEPENDENCIES
+-----------------------------
+Both bonus tracks — self-learning importance and data decay — were built with
+no new library in either manifest. Checked by reading the imports, not by
+trusting requirements.txt.
+
+Specifically:
+  * Learned weights are arithmetic: math.pow for the evidence half-life and a
+    saturating divide. No ML, statistics, or numerical library was added, and
+    none is needed — the brief explicitly allows a weighted counter, and a
+    dependency here would buy nothing but a larger install and a harder audit.
+  * Archive compression uses zlib and base64 from the Python standard library.
+    No compression package (lz4, zstandard, brotli) was added. zstd would give a
+    materially better ratio on multi-KB notes and is the right call at real
+    volume; it is a compiled dependency, and this prototype cannot demonstrate
+    needing it. Recorded rather than silently skipped.
+  * Extractive summarisation reuses services/features.py, which already exists
+    for Glance View scoring. No summarisation library, and deliberately no LLM
+    in the compression path — see DECISIONS.md D-043.
+  * The learning transparency panel (frontend/src/components/LearningPanel.jsx)
+    is plain React and Tailwind. No charting or visualisation library was added
+    to render the weights.
+
+
 DATA
 ----
 All data in this repository is SYNTHETIC and was written by hand for this
@@ -98,6 +130,17 @@ The consult transcripts in services/transcripts.py contain invented names,
 NRIC-format identifiers and phone numbers. They are placed there deliberately so
 that the redaction chokepoint has real identifiers to remove and the removal can
 be demonstrated rather than asserted.
+
+Phase 4 adds one more synthetic dataset: the prior clinician interaction history
+in backend/init_db.py (_seed_interaction_history). These are thirteen invented
+InteractionLog rows representing six months of clinical attention in one clinic.
+
+They are written as BEHAVIOUR, not as learned weights. The seed records the
+interactions and then runs the same aggregation a live click runs; it does not
+write FeatureWeight rows directly. Seeding the weights would have been shorter
+and would have been a lie — the demo would show numbers no interaction produced,
+in a build whose whole argument is that surfaced claims are traceable to their
+source.
 
 No external dataset is used. No real patient data has been used at any point,
 and no real record was ever accessible to this system.

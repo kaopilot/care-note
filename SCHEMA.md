@@ -259,24 +259,81 @@ partitioned.
 
 ---
 
-## Data decay (Phase 4, designed now)
+## Data decay (designed Phase 0, built Phase 4)
 
 `Entry.decay_state` moves `hot → warm → cold`:
 
 | State | Content | Glance View |
 |---|---|---|
 | `hot` | full, in `Entry.content` | full scoring eligibility |
-| `warm` | full, in `Entry.content` | recency multiplier down-weighted |
-| `cold` | `Entry.content` replaced by a compressed summary; original moved to `EntryArchive` | excluded from scoring; retrievable on demand |
+| `warm` | full, in `Entry.content` | score × 0.7 |
+| `cold` | `Entry.content` replaced by an extractive summary; original compressed into `EntryArchive` | score × 0.4 — **down-weighted, never excluded** |
+
+> **Correction (Phase 4).** This table previously said cold entries were
+> *excluded* from scoring. Building the policy showed that to be wrong, and the
+> code never did it: `scoring.DECAY_MULTIPLIER` puts cold at 0.4. An entry can
+> be the only record of an allergy and still be four years old. Age is a prior
+> about relevance, never a proof of irrelevance. See D-042.
 
 Modelling this in Phase 0 rather than bolting it on later means `decay_state` is
 available to the Glance View scorer from the moment that scorer exists, so the
-"data decay" bonus becomes a policy question rather than a migration.
+"data decay" bonus became a policy question rather than a migration.
 
-The safety constraint on decay: an entry is never eligible for `cold` while it
-has an unresolved `Task`, an open `Comment`, or an accepted `Highlight`. Old
-does not mean unimportant, and an outstanding action is the clearest possible
-signal that something still matters.
+### What is never compressed
+
+An entry is held at `warm` regardless of age when it has an unresolved `Task`,
+an open `Comment`, an accepted `Highlight`, a flagged conflict, a `risk_level`
+of `high`/`critical`, or content tagged with safety-critical vocabulary
+(allergy, anaphylaxis, sepsis, self-harm). Old does not mean settled, and an
+outstanding action is the clearest possible signal that something still matters.
+
+### Two columns Phase 4 added
+
+| Column | Why |
+|---|---|
+| `Entry.decay_hold_until` | Set by a manual restore. Without it, a clinician who reopened a four-year-old note to read it properly would find it recompressed by the next pass — which reads as the system arguing with them (D-043). |
+| `EntryArchive.compression` | Now carries a real value (`zlib+base64`) rather than `none`. |
+
+### Compression is reversible, and its cost is reported
+
+`EntryArchive.archived_content` holds the zlib-compressed, base64-encoded
+original, and `restore()` returns it byte for byte —
+`test_data_decay.py::test_compression_is_reversible_byte_for_byte` asserts exact
+equality, because a lossy archival step in a clinical record is a data-loss bug
+with a scheduler attached.
+
+The saving is on the **read path**, and the decay report says so rather than
+netting the two figures into one flattering number. On the seeded note:
+
+| Measure | Bytes |
+|---|---|
+| `Entry.content` before | 455 |
+| `Entry.content` after | 64 |
+| `EntryArchive` cost | +376 |
+| Net storage delta | −15 |
+
+Base64 inflates zlib's output by about a third, so at these note lengths the
+archive eats nearly the whole saving. What compression genuinely buys here is a
+7× smaller hot row — the thing a timeline load actually reads. Total storage
+only turns meaningfully positive on notes of a few KB, where the compression
+ratio beats that overhead. Reporting a single "bytes saved" figure would have
+concealed exactly that, so `decay.run()` returns `hot_bytes_*` and
+`archive_bytes` separately.
+
+### Offsets index the original, not the summary
+
+Every span pointer (`entry://<id>#span:12-48`) was computed against the entry's
+full text. Compressing `Entry.content` without redirecting resolution would move
+every offset onto different words — or overrun the end and report a dangling
+pointer for a highlight that is perfectly valid, breaking the requirement
+`test_highlight_provenance.py` exists to protect.
+
+`provenance.resolve()` therefore reads through `decay.original_content()`, which
+returns the archived original for cold entries. Cold storage changes what is
+cheap to read, not what is true. For the same reason a cold entry stops
+*minting* new spans (`refresh_entry_highlights` skips generation and only
+rescores): two incompatible offset frames in one table would be worse than
+fewer suggestions.
 
 ---
 
@@ -395,3 +452,87 @@ the product cannot keep.
 by `AIScribedNote` and `TranscriptSegment` rather than a row. The pointer
 grammar already resolves it, and a table would add a join to every provenance
 lookup to store a value that is only ever an identity.
+
+---
+
+## Phase 4 additions
+
+No new tables. `InteractionLog`, `FeatureWeight` and `EntryArchive` were all
+modelled in Phase 0 and are finally written to; the only structural change is
+`Entry.decay_hold_until` (above). That the schema survived contact with the
+feature it was designed for is the main thing this phase says about it.
+
+### The learning path, now closed
+
+Phase 2's `SCHEMA.md` listed one link as not yet connected:
+
+> `Interaction → learned weight` — Phase 4; tags written from Phase 2.
+
+It is connected now, and the direction of the dependency is the important part:
+
+```
+InteractionLog.content_features   (tags only, never prose)
+        │
+        │  weighted by action type, decayed by age (90-day half-life),
+        │  filtered to clinician/staff, scoped to one clinic
+        ▼
+FeatureWeight (clinic_id, feature_tag) → weight ∈ (−1, 1)
+        │
+        ▼
+scoring.learned_component()  →  W_LEARNED × mean(weights of this span's tags)
+```
+
+**`FeatureWeight` is a materialised view over `InteractionLog`, not a second
+record.** `learning.recompute_tags()` (incremental, on every write path) and
+`learning.rebuild_clinic()` (full) run the *same* accumulation function, so they
+cannot drift, and the weights can always be reconstructed from the log alone.
+`test_self_learning_importance.py::test_rebuilding_from_the_log_reproduces_the_incremental_weights`
+asserts that equality directly. If the two could disagree, the weights would
+become an unauditable second record of clinician behaviour.
+
+A tag with no learning-eligible evidence gets **no row at all** rather than a
+row with weight 0.0 — otherwise it would appear on the transparency surface as
+something the clinic has an opinion about, which is the opposite of true.
+
+### Which tags are learnable
+
+| Tag shape | Learnable | Why |
+|---|---|---|
+| `med:*`, `medclass:*`, `symptom:*`, `finding:*`, `entity:*`, `action:*` | yes | clinical vocabulary — transfers between entries |
+| `type:*`, `source:*`, `signal:*` | no | describes the container. `type:staff_note` appears on every staff note, so weighting it drifts into "staff notes matter" — a statement about authorship, not about the patient |
+
+### Which interactions count
+
+| Action | Signal | Note |
+|---|---|---|
+| `manual_highlight`, `pin` | +1.0 | strongest: an unambiguous statement about importance |
+| `accept_highlight` | +0.8 | explicit confirmation of a machine claim |
+| `reject_highlight` | −0.8 | explicit rejection |
+| `comment` | +0.4 | attention, but entry-wide rather than span-specific |
+| `edit` | +0.3 | engagement with existing content |
+| `resolve_comment` | +0.1 | weak positive |
+| `create` | 0.0 | recorded, not learned from — authorship is volume, not attention (D-039) |
+| `view` | 0.0 | recorded, not learned from — unavoidable, so it would learn "everything matters" |
+
+Only `clinician` and `staff` rows train the ranking. Admin is excluded for the
+same reason it cannot author clinical content (D-011). Patients are excluded
+because the surface being trained is the clinician Glance View.
+
+### The known scaling cost
+
+`recompute_tags()` prefilters `InteractionLog` with a SQL `LIKE` over the JSON
+`content_features` string, then matches exactly in Python. `_` is a `LIKE`
+wildcard and several tags contain one, so the SQL is a prefilter and never the
+decision. This is one unindexed scan per write path. The right answer at real
+volume is a normalised `interaction_tags` join table:
+
+```
+INTERACTION_TAG {
+    string interaction_id FK
+    string feature_tag    "indexed, with (clinic_id, feature_tag)"
+}
+```
+
+Not built: it adds a write-amplification path and a migration to buy performance
+this prototype cannot demonstrate needing. Recorded here rather than discovered
+later.

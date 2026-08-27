@@ -113,7 +113,10 @@ new path.
 The loop is closed everywhere except the last arrow. `InteractionLog` rows are
 written from Phase 2 onward; `FeatureWeight` is read but not yet written, so the
 learned term contributes exactly 0.0 and today's ranking is purely rule-based.
-Phase 4 adds the aggregation and nothing downstream changes shape.
+
+**Phase 4 update:** that last arrow is now connected, and nothing downstream
+changed shape — the breakdown keys, the storage format and the components that
+render them are all as Phase 2 left them. See *Phase 4 components* below.
 
 **Scoring is precomputed on write.** This is the decision the latency figure
 rests on — see *Latency* below.
@@ -554,3 +557,127 @@ Plus a fourth, quieter one: `AIScribedNote.confidence` is persisted, so the
 interface can show *how sure the model was* rather than presenting every summary
 with identical visual authority. Uniform confidence in a UI is itself a claim,
 and usually a false one.
+
+---
+
+## Phase 4 components
+
+Two subsystems, no new infrastructure, no new dependencies. Both sit behind the
+same `AccessScope` dependency as everything else.
+
+### The learning loop, closed
+
+```
+  clinician / staff action
+  (highlight, accept, reject, comment, edit)
+        │
+        ▼
+  services/interactions.record_interaction()          ◄── the chokepoint
+        │  writes InteractionLog(content_features = TAGS ONLY)
+        │  then calls, in the same call, unconditionally:
+        ▼
+  services/learning.apply_signal()
+        │  role filter  (clinician | staff only)
+        │  clinic scope (evidence read AND weight write)
+        ▼
+  services/learning.recompute_tags()
+        │  rescan InteractionLog for the touched tags
+        │  evidence = Σ action_weight × 0.5^(age_days / 90)
+        │  weight   = evidence / (|evidence| + 2.5)      → bounded (−1, 1)
+        │  floor at 0 for NEVER_DAMPENED tags
+        ▼
+  FeatureWeight(clinic_id, feature_tag)
+        │
+        ▼
+  services/scoring.learned_component()  → W_LEARNED × mean(weights)
+        │
+        ▼
+  highlights.refresh_patient_highlights()   ◄── on the write path, not on read
+        │
+        ▼
+  Highlight.score / .score_breakdown  ──► GET /patients/{id}/glance
+                                     ──► GET /clinic/learning  (transparency)
+```
+
+`record_interaction()` calling `apply_signal()` itself is the load-bearing part.
+Recording a behavioural signal and learning from it are one operation, enforced
+in one place, so no future route can log an interaction the learning table never
+sees. Same reasoning as the redaction chokepoint.
+
+**Nothing here runs on the Glance View read path.** Scores are recomputed when
+weights move — on accept, reject, manual highlight, or a clinic rebuild — so the
+300ms budget is unaffected. This is the same decision as Phase 2's precomputed
+scoring, extended to a new class of write.
+
+### What the learned term can and cannot do
+
+| Property | Mechanism |
+|---|---|
+| Cannot invent a highlight | `refresh_entry_highlights` rule 1 (no clinical reason → no highlight) runs **before** scoring. Learning re-ranks candidates the rule layer already found; it never creates one. |
+| Cannot dominate the score | Weights saturate in (−1, 1) and are multiplied by `W_LEARNED = 0.25`, so the learned term is capped at a quarter of the rule-based total. |
+| Cannot silence safety content | `NEVER_DAMPENED` floors allergy, critical-risk, anaphylaxis, sepsis and self-harm tags at zero (D-041). |
+| Cannot cross a clinic | `(clinic_id, feature_tag)` unique constraint, plus clinic scoping on the evidence read *and* the weight write. |
+| Cannot be trained by patients | Role filter: `clinician` and `staff` only. |
+| Cannot drift from its evidence | `FeatureWeight` is a materialised view; incremental and rebuild paths share one function (D-040). |
+
+### Data decay
+
+```
+  scripts/run_decay.py  ──┐
+  POST /clinic/decay/run ─┴──► services/decay.run(dry_run=True by default)
+                                     │
+                                     ▼  per entry: classify()
+                     ┌───────────────┴───────────────┐
+                     │                               │
+              age < 45d → hot            age ≥ 45d → protection check
+                                                     │
+                        ┌────────────────────────────┴────────────┐
+                   protected → warm                        not protected
+                   (open task / open comment /                   │
+                    accepted highlight / conflict /       age ≥ 180d and
+                    high|critical risk / allergy,         length ≥ 220ch
+                    anaphylaxis, sepsis, self-harm)              │
+                                                                 ▼
+                                                         compress() → cold
+                                                     ┌───────────┴──────────┐
+                                            Entry.content =        EntryArchive =
+                                            extractive summary     zlib+base64(original)
+                                                     │
+                                                     ▼
+                                     provenance.resolve() reads through
+                                     decay.original_content() → the ARCHIVE,
+                                     so every span pointer still resolves
+```
+
+`restore()` is the inverse and is asserted byte-exact. It sets
+`decay_hold_until` so the next pass does not immediately undo it, and it appends
+**no `Version`** — nothing about the clinical content changed, and putting a
+storage-tier event into a clinical audit trail would make the revision history
+harder to read for what it is actually for.
+
+### Security posture — Phase 4 additions
+
+| Control | Status | Note |
+|---|---|---|
+| Learning substrate contains no prose | **implemented** | `InteractionLog.content_features` stores extracted tags only. `GET /clinic/learning` is asserted to leak no patient text (`test_the_learning_surface_carries_no_patient_data`). |
+| Learned weights are clinic-partitioned | **implemented** | Enforced on read and write; asserted against a populated neighbouring clinic, not an empty one. |
+| Decay is clinic-scoped | **implemented** | `test_decay_is_clinic_scoped`. |
+| Archive endpoint returns metadata, not content | **implemented** | Reading an original is an audited restore; `GET /entries/{id}/archive` returns sizes and timestamps so it cannot be a way round that. |
+| Applying decay is admin-only | **implemented** | Preview available to clinicians; `dry_run=True` default. |
+| Compressed content is recoverable | **implemented** | Byte-exact round trip asserted. |
+| Per-user normalisation of learning signals | **known gap** | One enthusiastic clinician counts the same as practice consensus. Saturation bounds it; normalisation is the real answer at volume. |
+| Decay scheduling | **documented decision** | No cron or worker. Explicit trigger only — see D-043. |
+| `Version` snapshots are not compressed | **known gap** | Cold is a hot-row optimisation; the version chain still holds full snapshots. See D-044 and the Phase 4 deferred list. |
+
+### Latency — unchanged, and why
+
+The Glance View P95 figure in *Latency* above still stands: Phase 4 added no
+work to that path. Every new computation happens on a write (accept, reject,
+manual highlight, rebuild, decay run). The one measurable change is that
+`POST /highlights/{id}/accept` now rescores the patient's chart before
+returning, which is bounded by that patient's entry count — a write-path cost
+paid to keep the read path clean.
+
+`POST /clinic/learning/rebuild` and `POST /clinic/decay/run` are deliberately
+**not** on any user-facing path. Both are administrative operations whose cost
+scales with clinic size, and neither is called during a consult.

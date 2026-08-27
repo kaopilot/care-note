@@ -703,3 +703,196 @@ rather than the response, because the wire format deliberately omits
   ever read them. Phase 4 is the first consumer, so the first thing it should
   do is check that the tags being written are actually the shape the scorer
   wants — a schema that was never read back is a schema that was never tested.
+
+---
+
+## Phase 4 — Self-learning importance and data decay (2026-08-27)
+
+Both bonus tracks are built rather than described. The phase closed the last of
+the open questions carried since Phase 2 — the empty `FeatureWeight` table — and
+found two real defects doing it, which are D-040 and D-042 below.
+
+### D-039 · Authorship is recorded but never learned from
+
+**Found by auditing the tags Phase 2 was writing**, which the Phase 3 notes
+flagged as the first thing Phase 4 should do: *a schema that was never read back
+is a schema that was never tested.*
+
+Creating an entry was logging `InteractionAction.EDIT` with the tags of its own
+content. Fed into a learned weight, that trains the ranking on **what this clinic
+writes about most**, which is volume, not attention. A clinic that sees a lot of
+diabetes would learn that diabetes matters — not because anyone stopped and
+attended to it, but because they typed it often. The Glance View would then
+promote the most common thing on every chart, which is close to the opposite of
+triage.
+
+Added `InteractionAction.CREATE`, weighted `0.0`. Same treatment for `VIEW`:
+opening a chart is unavoidable, so counting it would learn that everything
+matters.
+
+Both are still written to `InteractionLog`. Recorded is not the same as
+learned-from, and a behavioural history with the authorship events deleted would
+be worse for any future analysis than one with them labelled.
+
+**Alternative rejected:** give `CREATE` a small positive weight (0.1). Tempting
+because writing about something *is* weak evidence of caring about it, but the
+volume asymmetry swamps it — a clinic writes hundreds of notes for every
+highlight it confirms, so even a small weight would dominate the deliberate
+signals through sheer count.
+
+### D-040 · The learned term is recomputed from the log, never nudged
+
+`FeatureWeight` is a **materialised view** over `InteractionLog`, not a running
+tally. Every write path calls `learning.recompute_tags()`, which rescans the log
+for the tags just touched and recomputes them from scratch; `rebuild_clinic()`
+does the same for all tags at once. Both call one accumulation function.
+
+The obvious cheaper design is an incremental nudge — `weight += 0.1` on accept.
+Rejected because it creates two formulas that must agree forever and silently
+diverge the first time one is changed. Since the weights are a claim about a
+clinician's own behaviour, a version that cannot be reproduced from the evidence
+is not auditable, and "the system says you care about this" with no way to check
+it is precisely the failure mode this product argues against.
+
+The cost is one unindexed scan per write path, on writes only — never on the
+Glance View read path, which still reads precomputed scores. The scaling answer
+(a normalised tag join table) is recorded in `SCHEMA.md` and not built.
+
+**Coupling decision:** `learning.apply_signal()` is called from inside
+`interactions.record_interaction()`, not from the six routes that record
+signals. Recording a behavioural signal and learning from it are one operation,
+enforced in one place — the same reasoning as the redaction chokepoint. A rule
+repeated at six call sites is a convention waiting to be forgotten.
+
+**Known boundary:** weights are clinic-scoped but rescoring is triggered
+per-patient. A patient nobody has touched keeps stale scores until their chart
+is written to or `POST /clinic/learning/rebuild` runs (a nightly job in
+production). Rescoring the whole clinic on every click was the alternative and
+is unbounded work on a hot path. The staleness is visible and bounded; the
+alternative is a latency cliff nobody sees coming.
+
+### D-041 · Learning is asymmetric: safety vocabulary is never dampened
+
+Weights for `entity:allergy`, `risk:critical`, `symptom:anaphylaxis`,
+`symptom:suicidal`, `symptom:self-harm` and `symptom:sepsis` are floored at
+zero. Clinician behaviour can promote them; it can never suppress them.
+
+A clinician dismissing three warfarin suggestions should teach the system to
+stop nagging about warfarin — that is the feature working. A clinician
+dismissing three anaphylaxis suggestions must **not** teach it to stop
+mentioning anaphylaxis, because the cost of a missed allergy is not symmetric
+with the cost of one extra line on a card. The learning rule is not symmetric
+either.
+
+This is deliberately a **floor, not a filter**. The dismissals are still
+recorded, still counted, and still shown on `GET /clinic/learning` as negative
+signals sitting next to a weight of 0.0. The seed demonstrates it: `entity:allergy`
+reads `+0/−2` at weight `0.00`. Hiding the evidence would make the system look
+like it agreed with the clinician; showing it says plainly *we recorded what you
+did and we are not going to act on it here.*
+
+**Alternative rejected:** let the weight go negative but clamp the final score.
+Equivalent in effect, worse in explanation — the transparency surface would then
+show a negative number that the ranking does not actually use.
+
+### D-042 · Cold entries are down-weighted, never excluded
+
+`SCHEMA.md` said since Phase 0 that cold entries were "excluded from scoring".
+The code never did this — `scoring.DECAY_MULTIPLIER` has always had cold at 0.4
+— and building the policy confirmed the code was right and the document wrong.
+The document is corrected rather than the code.
+
+An entry can be the only record of an allergy and still be four years old. Age
+is a prior about relevance, never a proof of irrelevance. Excluding cold entries
+from scoring would mean the one place the system is most likely to hold
+something nobody remembers is the one place it refuses to look.
+
+Recorded rather than quietly fixed because a schema document that disagreed with
+the scorer for three phases is worth knowing about: it survived that long
+precisely because nothing had exercised the path.
+
+### D-043 · Compression is reversible, offline, and holds after a restore
+
+Three sub-decisions on the one operation in this system that rewrites stored
+clinical text.
+
+**No LLM in the compression path.** The summary is extractive — real sentences
+from the original, selected by the same feature tagger the Glance View scores
+on, kept verbatim and in their original order. An abstractive summariser
+hallucinating during archival would corrupt the record permanently, silently,
+and at the moment nobody is looking at it. The cost is that summaries read as
+clipped rather than fluent, which is the correct trade for an operation whose
+output replaces what a clinician wrote.
+
+**A restore sets `decay_hold_until`.** Without it, a clinician who reopened a
+four-year-old note to read it properly would find it recompressed by the next
+nightly pass. That reads as the system arguing with them. Thirty days, then the
+policy resumes.
+
+**`dry_run=True` is the default** on both `decay.run()` and
+`POST /clinic/decay/run`, and applying is admin-only. Admin is the oversight
+role (D-011) and cannot author clinical content, which makes it the right holder
+of a lifecycle operation that rewrites stored text without adding any clinical
+claim to the record.
+
+**Provenance defect found here.** Span pointers index the entry's *full* text.
+Compressing `Entry.content` without redirecting resolution moves every offset
+onto different words, or overruns the end and reports a dangling pointer for a
+perfectly valid highlight — which would have broken the requirement Phase 3's
+`test_highlight_provenance.py` exists to protect, silently, and only for old
+entries. `provenance.resolve()` now reads through `decay.original_content()`,
+cold entries stop minting new spans, and manual highlighting on a cold entry is
+refused with a message telling the clinician to restore first rather than
+anchoring to the wrong words.
+
+### D-044 · The decay report does not claim a storage saving it cannot show
+
+The first version of `decay.run()` returned `bytes_saved` by comparing
+`Entry.content` before and after. That figure ignored what the archive costs.
+
+Base64 inflates zlib's output by about a third, so on the seeded 455-byte note
+the archive costs 376 bytes against a 391-byte reduction — a net saving of
+fifteen bytes. The honest figure is that compression buys a **7× smaller hot
+row**, which is what a timeline load actually reads, and roughly break-even
+total storage at prototype note lengths. Total storage turns meaningfully
+positive on notes of a few KB, where the compression ratio beats the base64
+overhead.
+
+`decay.run()` now reports `hot_bytes_before`, `hot_bytes_after`,
+`archive_bytes` and `net_storage_delta` separately. Keeping the single number
+would have been a more impressive line in the brief and a false one.
+
+### Deferred / cut in Phase 4
+
+* **Normalised tag index for `InteractionLog`.** The `LIKE` prefilter is one
+  unindexed scan per write. Schema for the replacement is in `SCHEMA.md`; not
+  built because the prototype cannot demonstrate needing it.
+* **Per-user normalisation of learning signals.** One enthusiastic clinician
+  currently counts the same as consensus across a practice. Saturation bounds
+  the damage (asserted), but at real volume signals should be normalised per
+  user before aggregation.
+* **Automatic decay scheduling.** No cron, no background worker. `run_decay.py`
+  and the admin endpoint are explicit triggers. A prototype that silently
+  rewrote clinical text on a timer would be harder to reason about during a
+  demo, and the policy is the interesting part.
+* **Learning from *where* in an entry a comment landed.** Comments attach to
+  entries, not spans, so commenting reinforces every tag in the note. Span-level
+  comment anchoring would sharpen the signal and is a Phase 2 schema change, not
+  a Phase 4 one.
+* **Decaying `Version` snapshots.** Cold compresses `Entry.content` only; the
+  version chain still holds every full snapshot, so this is a hot-row
+  optimisation rather than true storage reduction. Compressing history would
+  need care not to break revert, and revert correctness is directly graded.
+
+### Open questions carried out of Phase 4
+
+* Two of Phase 2's three open questions remain open and still deliberate
+  (`patient_summary` authorship, `list_entries` payload size). The third — the
+  empty `FeatureWeight` table — is closed by this phase.
+* The learning loop has never been observed with more than one clinician's
+  behaviour in it. Clinic A's seeded history is a single synthetic cohort, so
+  disagreement between two clinicians in the same clinic is untested behaviour,
+  not a designed one.
+* Whether promoted content actually shortens a clinician's time-to-decision is
+  the outcome the whole feature exists for, and it is not measurable from inside
+  the system. It needs instrumented users.
