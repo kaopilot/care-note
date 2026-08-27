@@ -96,7 +96,8 @@ python scripts/phase5_smoke.py     # 31 checks — ambient voice capture
 python scripts/bench_glance.py     # Glance View latency, measured not asserted
 ```
 
-`phase1_smoke.py` needs the server running; the other two are self-contained.
+`phase1_smoke.py` needs the server running on port 8000; the other four are
+self-contained (they drive the app in-process and need no server).
 
 `phase2_smoke.py` walks every Phase 2 surface in the order the demo scenarios
 use them: all three scribe interaction types through redaction, the role-scoped
