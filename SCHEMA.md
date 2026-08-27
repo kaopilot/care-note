@@ -27,12 +27,17 @@ erDiagram
     COMMENT ||--o{ TASK : "assignment"
 
     AI_SCRIBED_NOTE ||--o{ TRANSCRIPT_SEGMENT : "session_id"
+    AI_SCRIBED_NOTE ||--o| CAPTURE_SESSION : "recording, if voice-captured"
+    ENTRY ||--o{ SUMMARY_ATTRIBUTION : "line-level sources"
+    TRANSCRIPT_SEGMENT ||--o{ SUMMARY_ATTRIBUTION : "spoken source of a line"
 
     USER ||--o{ INTERACTION_LOG : "generates signal"
     USER ||--o{ AUDIT_LOG : "is actor in"
     USER ||--o{ PATIENT_VIEW : "last looked at"
     PATIENT ||--o{ PATIENT_VIEW : "seen by"
     CLINIC ||--o{ FEATURE_WEIGHT : "learns per-clinic"
+    CLINIC ||--o{ CAPTURE_SESSION : "scopes"
+    PATIENT ||--o{ CAPTURE_SESSION : "recorded during"
 
     CLINIC {
         string id PK
@@ -133,6 +138,51 @@ erDiagram
         string redacted_text "stored already-redacted"
         float confidence
         string language
+    }
+    PATIENT_VIEW {
+        string id PK
+        string user_id "who looked"
+        string patient_id FK
+        string clinic_id FK
+        datetime last_viewed_at "drives what-is-new"
+        datetime previous_viewed_at "so a reload does not erase the delta"
+    }
+    CAPTURE_SESSION {
+        string id PK
+        string session_id UK "joins capture to segments and entry"
+        string clinic_id FK
+        string patient_id FK
+        string entry_id FK "null until the scribe completes"
+        string kind "patient|clinical"
+        string source "live_recording|audio_upload|transcript_upload"
+        string asr_provider "stub|local|remote|none"
+        string asr_model
+        bool transcription_simulated "the honesty flag"
+        int audio_bytes_received
+        bool audio_retained "always false, asserted by test"
+        int duration_ms
+        int segment_count
+        string languages "JSON list, e.g. [en, en-ms]"
+        float mean_confidence
+        int low_confidence_segments
+        int overlap_segments
+        int redaction_count
+        string device_label
+        string created_by
+        string created_by_role
+    }
+    SUMMARY_ATTRIBUTION {
+        string id PK
+        string entry_id FK
+        string clinic_id FK
+        string session_id "the transcript run"
+        int span_start "char offset into Entry.content"
+        int span_end
+        int source_version_number "offsets belong to one version"
+        int segment_sequence FK "TranscriptSegment.sequence"
+        string provenance_pointer "transcript://session#segment:n"
+        string match_type "verbatim|derived"
+        float match_score
     }
     TASK {
         string id PK
@@ -536,3 +586,89 @@ INTERACTION_TAG {
 Not built: it adds a write-amplification path and a migration to buy performance
 this prototype cannot demonstrate needing. Recorded here rather than discovered
 later.
+
+---
+
+## Phase 5 additions
+
+Two tables, and one clarification about which of them is load-bearing.
+
+### `CAPTURE_SESSION` — everything about the recording except the recording
+
+One row per ambient capture. It holds what a reviewer needs to judge a
+voice-derived note: how long the recording was, what transcribed it, how many
+identifiers came out, how confident the recogniser was, and how many bytes of
+audio arrived.
+
+The column that matters most is `audio_retained`, which is always `false`.
+Storing a boolean that never varies looks like dead weight until you ask how a
+reviewer would otherwise check the claim. A sentence in a README is an
+assertion; a column is a fact a test can walk
+(`test_audio_is_never_retained` iterates every column on the row looking for the
+bytes). `audio_bytes_received` sits beside it so the pair reads as an
+accounting: this much arrived, none of it was kept. See D-045.
+
+`transcription_simulated` is the second honesty column. With no ASR provider
+configured the stub cannot really transcribe, and that flag propagates to the
+entry card, the transcript panel and the API's `notice` string rather than
+letting an interface imply speech recognition happened (D-046).
+
+`session_id` is the join key, not `id`. One string — carried on the Entry's
+`provenance_pointer`, on every `TranscriptSegment`, and here — links capture →
+segments → note without a chain of foreign keys.
+
+### `SUMMARY_ATTRIBUTION` — which spoken words produced which line
+
+`Entry.provenance_pointer` answers *where did this note come from*. This table
+answers *where did that line come from*, which is the question a clinician
+actually asks.
+
+```
+Entry.content
+  "- Ankle swelling is a known side effect of amlodipine..."
+   ^span_start                                     ^span_end
+        │
+        └── SummaryAttribution ──► transcript://cap-…#segment:8
+                                        │
+                                        └── TranscriptSegment(sequence=8)
+                                              speaker=clinician, 31.6s, conf 0.86
+```
+
+Three properties worth stating explicitly:
+
+* **Rows exist only where a link could be established.** A line matching nothing
+  gets no row and the UI shows no source, rather than a plausible pointer to
+  somewhere nearby (D-048). Absence of a row is information.
+* **`match_type` distinguishes proof from inference.** `verbatim` means the
+  segment's words are in the line and anyone can re-derive it; `derived` means
+  vocabulary overlap survived rewording. The UI labels them differently because
+  they are different strengths of evidence.
+* **`source_version_number` scopes the offsets.** Character offsets are only
+  meaningful against the text they were computed from. An edit creates a new
+  version and the rows are rebuilt for it rather than appended to — the same
+  reasoning as `Highlight.source_version_number` (see "Why highlights carry a
+  version number" above), and for the same failure it prevents: an offset
+  surviving into a version where it now addresses different words.
+
+### Which table is load-bearing
+
+`SUMMARY_ATTRIBUTION` is. `CAPTURE_SESSION` is not.
+
+Attribution is generated inside `run_scribe`, so **every** AI-scribed note gets
+line-level provenance — the Phase 2 fixture path already wrote transcript
+segments, and the matching is the same work (D-054). A capture row exists only
+when there was an actual recording.
+
+This is why `GET /captures/{session_id}` is keyed on the segments rather than on
+the capture row, and returns `capture: null` for a fixture-generated session.
+Keying it the other way made the endpoint report "no transcript is stored" for
+notes whose transcript was sitting right there.
+
+### What Phase 5 did not need to change
+
+Nothing in `ENTRY`, `AI_SCRIBED_NOTE` or `TRANSCRIPT_SEGMENT`. Voice capture
+produces entries through the same `run_scribe` path as Phase 2's fixtures, with
+the same metadata contract, because Phase 0 modelled transcripts as
+speaker-labelled turns with timings and confidence rather than as flat text —
+and `TRANSCRIPT_SEGMENT` was commented from the start as a Phase 5 provenance
+target. Ambient capture changes where the words come from and nothing else.

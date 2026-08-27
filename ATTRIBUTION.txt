@@ -24,6 +24,9 @@ SQLAlchemy         2.0.52    MIT          ORM and query construction
 pydantic           2.13.4    MIT          Request/response validation
 PyJWT              2.7.0     MIT          JWT encode/decode
 httpx              0.28.1    BSD-3-Clause HTTP client (LLM provider + test client)
+python-multipart   0.0.20    Apache-2.0   multipart/form-data parsing (Phase 5
+                                          audio + transcript upload). Required
+                                          by Starlette for UploadFile/Form.
 anyio              4.14.2    MIT          Async compatibility (Starlette dependency)
 pytest             9.1.1     MIT          Test runner
 
@@ -65,8 +68,30 @@ Optional live provider, used only when CARENOTE_LLM_PROVIDER=anthropic:
   Anthropic Claude (claude-sonnet-4-5) — commercial API, Anthropic Commercial
   Terms of Service. Not redistributed; accessed over the network at runtime.
 
-If Phase 5 (voice capture) is built, any speech-to-text model added must be
-listed here at the moment it is added.
+PHASE 5 SPEECH-TO-TEXT: NO MODEL ADDED.
+
+Ambient voice capture ships with a deterministic offline stub
+(`_SimulatedProvider` in backend/app/ai/asr_client.py). It does not perform
+speech recognition — it returns a fixed synthetic transcript keyed on the
+audio's digest, and every capture it produces is flagged
+`transcription_simulated = true` so no surface can imply otherwise
+(DECISIONS.md D-046).
+
+No speech-to-text model, model weights, or ASR service is bundled, downloaded,
+or called. Two provider slots exist as documented interfaces with
+NotImplementedError bodies:
+
+  `local`   intended for faster-whisper / whisper.cpp (both MIT; OpenAI Whisper
+            weights are MIT-licensed). NOT vendored and NOT downloaded by this
+            repository. If implemented, add the library and the model weights
+            here at that moment.
+  `remote`  intended for a hosted recogniser. Gated behind
+            CARENOTE_ASR_ALLOW_AUDIO_EGRESS and unimplemented; no vendor is
+            configured, so no vendor terms apply to this build.
+
+The model names appearing in configuration defaults (e.g. "whisper-large-v3")
+are placeholder identifiers for an unimplemented path, not evidence that any
+model was used.
 
 
 PHASE 2 — NO NEW DEPENDENCIES
@@ -130,6 +155,20 @@ The consult transcripts in services/transcripts.py contain invented names,
 NRIC-format identifiers and phone numbers. They are placed there deliberately so
 that the redaction chokepoint has real identifiers to remove and the removal can
 be demonstrated rather than asserted.
+
+Phase 5 adds one more synthetic dataset: the simulated consult transcripts in
+backend/app/ai/asr_client.py (_CLINICAL_CAPTURE, _PATIENT_CAPTURE). Every line
+is invented. They contain a name placeholder, an NRIC-format identifier
+(S8412345D) and a phone number (+65 6123 4567) that have never belonged to
+anyone, planted so the redaction boundary has real identifiers to remove and the
+removal can be demonstrated rather than asserted.
+
+They also contain code-switched English/Malay clinical speech ("malam paling
+sakit", "mahu pecah"). This is invented dialogue written to exercise per-segment
+language tagging; it is not drawn from any corpus, transcript, or recording.
+
+No audio file, voice sample, or speech corpus is included in this repository or
+was used at any point. The build has never transcribed real audio.
 
 Phase 4 adds one more synthetic dataset: the prior clinician interaction history
 in backend/init_db.py (_seed_interaction_history). These are thirteen invented

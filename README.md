@@ -104,10 +104,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 297 tests
+pytest tests/ -v                  # from the repository root — 334 tests
 ```
 
-297 tests, all passing, no API key or network required. Roughly 24 seconds.
+334 tests, all passing, no API key or network required. Roughly 24 seconds.
 
 To run just the four files the brief names:
 
@@ -117,6 +117,7 @@ pytest tests/test_revision_history.py -v      # versions, revert, audit trail
 pytest tests/test_highlight_provenance.py -v  # every pointer resolves
 pytest tests/test_concurrent_edits.py -v      # parallel edits, deterministic conflicts
 pytest tests/test_self_learning_importance.py -v   # BONUS — adaptive prioritisation
+pytest tests/test_voice_capture.py -v              # BONUS — ambient consult capture
 ```
 
 Or by area:
@@ -127,6 +128,7 @@ pytest tests/ -v -k phase1        # the walking-skeleton proofs
 pytest tests/ -v -k phase2        # the Phase 2 product-surface tests
 pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 pytest tests/test_self_learning_importance.py tests/test_data_decay.py -v  # Phase 4 bonuses
+pytest tests/test_voice_capture.py -v -k provenance   # segment-level provenance only
 ```
 
 ⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
@@ -254,6 +256,26 @@ it does not"** — bare lowercase names in prose, transliterated names outside t
 gazetteer, and quasi-identifier combinations are not caught. One test asserts
 that limitation explicitly rather than hiding it.
 
+### Voice capture is where this rule meets its limit
+
+Audio takes the same route — `asr_client` → turns → `run_scribe` → `redact_phi`
+per turn → `llm_client` (which redacts again) — so every *word* is redacted
+before a model sees it, and `TranscriptSegment` rows are stored already
+redacted.
+
+But the ordering is forced and it is worth being blunt about:
+
+> **Audio cannot be redacted before transcription.** `redact_phi()` is regex
+> over text; there is no regex over a waveform. To redact a recording you must
+> first know what was said, and that is transcription.
+
+So the chokepoint protects the transcript, not the recording. Whoever transcribes
+hears the patient say their own name. The default recogniser runs in-process so
+nothing leaves the machine; a hosted one would receive un-redacted speech and is
+therefore gated fail-closed behind `CARENOTE_ASR_ALLOW_AUDIO_EGRESS`. The audio
+itself is never persisted. See § "Ambient consult capture" and DECISIONS.md
+D-045/D-046.
+
 ---
 
 ## How RBAC is enforced
@@ -306,23 +328,29 @@ backend/
     core/       config, db, enums, provenance URIs, content-free logging
     security/   rbac.py (enforcement) · policy.py (rules) · auth.py (JWT)
     ai/         redaction.py (chokepoint) · llm_client.py (only LLM egress)
+                asr_client.py (only audio→text path; egress gate)
     routes/     auth · patients · entries · comments · highlights · glance
                 learning (learned weights + decay lifecycle)
+                capture (voice capture, transcript, line attribution)
                 schemas.py (one entry wire format, used by every route)
     services/   features (clinical vocabulary) · scoring (importance)
                 highlights (lifecycle) · glance (Top Card) · scribe (AI pipeline)
                 transcripts (synthetic fixtures) · interactions (learning signal)
                 learning (behaviour → weights) · decay (hot/warm/cold lifecycle)
+                capture (voice orchestration) · attribution (line → segment)
     models.py   full SQLAlchemy schema
   init_db.py    create tables + seed synthetic fixture
 frontend/
+  public/         manifest.webmanifest · sw.js (shell cache; never caches /api)
+                  icons/
   src/
     lib/          api.js (one fetch wrapper) · format.js (display vocabulary)
     components/   GlanceView · Timeline · EntryCard · Comments
                   VersionHistory · PatientHome · LearningPanel · Primitives
+                  VoiceCapture · TranscriptPanel (transcript + line sources)
     App.jsx       shell: session, patient switching, provenance jump-to
-scripts/        phase1_smoke · phase2_smoke · phase4_smoke · bench_glance
-                run_decay (the nightly decay job, as an explicit script)
+scripts/        phase1_smoke · phase2_smoke · phase4_smoke · phase5_smoke
+                bench_glance · run_decay (the nightly decay job, as a script)
 tests/
 docs/
 ARCHITECTURE.md  stack reasoning, component diagram, enforcement, security posture
@@ -353,6 +381,9 @@ ATTRIBUTION.txt  dependencies and licenses
 | Patient view | Plain language, calmer register, no scores or clinical shorthand |
 | Self-learning importance | Clinician behaviour adapts the ranking; bounded, clinic-scoped, inspectable, and floored on safety vocabulary |
 | Data decay | hot → warm → cold with byte-exact reversible compression and protection rules |
+| Ambient voice capture | Record in-browser, upload audio, or paste a transcript — all three produce a scribed entry |
+| Segment-level provenance | Every summary line links to the spoken segment behind it, with speaker, timestamp and confidence |
+| Installable PWA | Manifest + service worker; `/api` is never cached |
 | Latency | Measured: P95 **10.8–13.2 ms** server handling across runs, against a 300 ms budget |
 
 ### Partial or deliberately deferred
@@ -373,14 +404,9 @@ ATTRIBUTION.txt  dependencies and licenses
 - **Decay scheduling.** No cron and no background worker. `scripts/run_decay.py`
   and the admin endpoint are explicit triggers. A prototype that silently
   rewrote clinical text on a timer would be harder to reason about.
-- **Voice capture (Phase 5).** Not started. The scribe pipeline already consumes
-  turn-structured input with speaker labels and timings, so the transcription
-  source can be swapped without changing anything downstream.
-- **The four brief-named test files (Phase 3).** `test_rbac_scope.py`,
-  `test_revision_history.py`, `test_highlight_provenance.py` and
-  `test_concurrent_edits.py` arrive in Phase 3. The behaviours they will cover
-  are already exercised by `test_phase2_core.py` and the smoke scripts, but the
-  files are graded by name and will be written as specified.
+- **Voice capture (Phase 5).** Built, with one large caveat: **the default
+  recogniser is a simulated stub that does not perform speech recognition.** See
+  "Ambient consult capture" below for exactly what is real and what is not.
 - **Real-time multi-user sync.** No WebSocket, no live cursors. Optimistic
   locking covers the collision case the brief names; presence would be demo
   polish paid for in infrastructure.
@@ -419,6 +445,17 @@ the range is reported rather than the best run.
 - **`InteractionLog` tag matching is an unindexed scan.** One per write path.
   The normalised join table that fixes it is specified in `SCHEMA.md` and not
   built.
+- **Voice capture does not actually transcribe.** The default recogniser is a
+  simulated stub that returns a fixed synthetic transcript. It flags itself
+  everywhere it appears, but no audio has ever been transcribed by this build.
+- **Audio cannot be redacted before transcription.** There is no regex over a
+  waveform, so the redaction chokepoint that protects every other input cannot
+  protect a recording. The mitigation is architectural — keep transcription
+  inside the trust boundary — and the hosted path is gated fail-closed rather
+  than solved.
+- **No consent model for patient-made recordings.** The clinician is a party to
+  a recording made in the patient view and is never asked, and the clinical view
+  shows no indicator that one exists.
 - **Whether any of this actually helps is unmeasured.** Whether promoted content
   shortens a clinician's time-to-decision is the outcome the feature exists for
   and cannot be measured from inside the system. It needs instrumented users.
@@ -526,6 +563,159 @@ after a decay pass.
 
 ---
 
+## Ambient consult capture (voice)
+
+Voice-to-note capture for both patient and clinical users. Three ways in, all
+producing the same kind of AI-scribed entry:
+
+| Path | Where | Real? |
+|---|---|---|
+| Record in the browser | Clinical view and patient view, mobile or laptop | Recording is real; **transcription is simulated** |
+| Upload an audio file | Same | Same |
+| Paste or upload a transcript | Same | **Fully real** — no recogniser involved |
+
+### Read this before judging the demo
+
+**The default speech recogniser does not recognise speech.** With no ASR
+provider configured, `_SimulatedProvider` returns a fixed synthetic transcript
+derived deterministically from the audio's digest. Your recording is genuinely
+uploaded, measured and discarded — but the words that come back were not heard.
+
+Every capture it produces is flagged `transcription_simulated`, and that flag
+appears on the entry card, in the transcript panel, and in the API payload. You
+will see **⚠ Simulated transcription** in the UI. That is deliberate: a system
+whose entire argument is that a clinician can trace any claim to its source
+must not itself imply that speech recognition happened when it did not
+(DECISIONS.md D-046).
+
+If you want a path with no simulation anywhere, paste a transcript. Nothing is
+invented on that path — the text you supply is parsed, redacted, summarised and
+attributed, and no recogniser is credited for it.
+
+### Why the recogniser is not just wired up to a real one
+
+Because of a constraint worth stating plainly:
+
+> Audio cannot be redacted before transcription. `redact_phi()` is regex over
+> text and there is no regex over a waveform. To redact a recording you must
+> first know what was said — and that is transcription.
+
+So the redaction chokepoint that protects every other input in this system
+**cannot** protect audio. Whoever transcribes hears the patient say their own
+name, in their own voice. A voice is biometric identifying data, so the
+recording is PHI before a single word is recognised.
+
+That leaves a choice about *who transcribes*, and `backend/app/ai/asr_client.py`
+makes it explicit:
+
+- `stub` (default) — in-process, nothing leaves the machine, flags itself.
+- `local` — the production answer: faster-whisper or whisper.cpp beside the API,
+  inside the same trust boundary as the database. **Documented interface,
+  deliberately unimplemented.**
+- `remote` — a hosted recogniser. Refuses to run unless
+  `CARENOTE_ASR_ALLOW_AUDIO_EGRESS=true`, and **fails closed** rather than
+  degrading to the stub, because a control that silently downgrades is one
+  nobody notices is off.
+
+### What happens to the audio
+
+It is read into memory, transcribed, and dropped when the request ends. It is
+never written to disk, to the database, or to a log. `CaptureSession` records
+how many bytes arrived and that none were kept, so the claim is a stored fact
+rather than a sentence here — `test_audio_is_never_retained` walks every column
+on the row looking for the bytes (DECISIONS.md D-045).
+
+**The cost:** a mis-transcription can never be checked against what was actually
+said. The transcript is the record.
+
+### Provenance back to spoken segments
+
+Click **Transcript & sources** on any AI-scribed note. You get:
+
+- the speaker-labelled transcript with timestamps, per-segment confidence,
+  code-switch tags and overlap markers;
+- a **"Where each line came from"** list mapping each summary line to the
+  segment that produced it — click one to highlight that segment.
+
+Links are established **by matching after the fact, never by asking the model to
+cite itself**. Models hallucinate citations as readily as content, and a
+citation that looks checkable and is wrong leaves a clinician *more* confident in
+a bad line. So:
+
+- **verbatim** — the segment's words are in the line, re-derivable by anyone;
+- **derived** — vocabulary survived rewording; labelled as weaker;
+- **no row** — the line shows no source rather than a plausible wrong one.
+
+Coverage is reported per note. On the seeded demo consult, 7 of 7 lines attribute
+verbatim.
+
+### Who can capture what
+
+Enforced server-side, not by which button the client draws:
+
+| Role | May capture | Produces | May read transcripts |
+|---|---|---|---|
+| `patient` | patient captures, own record only | `ai_patient_session_summary` | **No** — including their own (D-049) |
+| `staff` | clinical captures | `ai_nurse_consult_summary` | Yes |
+| `clinician` | clinical captures | `ai_doctor_consult_summary` | Yes |
+| `admin` | nothing — oversight, not authorship | — | Yes |
+
+The entry type is derived from the authenticated role, so no request field can
+enter a recording as a different kind of encounter than the caller was in. A
+patient gets a receipt for what they sent, not the clinical note written from it
+— a consult they recorded contains the clinician's half too.
+
+### Fully implemented vs. stretch, stated plainly
+
+**Implemented and demonstrable**
+
+- Upload-based pipeline end to end (audio, audio file, or transcript)
+- Live in-browser recording via `MediaRecorder`, mobile and laptop
+- Installable PWA (manifest, service worker, icons)
+- PHI redaction before any text reaches a model, asserted against the database
+- Audio never persisted, asserted against the database
+- Speaker-labelled transcript with timestamps and per-segment confidence
+- Confidence markers reusing the Glance View's chip and its 0.6 threshold
+- Code-switching: per-segment language tags, non-English text preserved intact
+- Overlapping-speech detection from timings
+- Line-level provenance to transcript segments, with match strength and coverage
+- Capture view boundary and cross-clinic isolation, tested at the API layer
+
+**Not implemented — stretch or deliberately deferred**
+
+- **Real speech recognition.** The stub does not transcribe. `_LocalWhisper` is
+  an interface with `NotImplementedError` in its body, not a half-wired
+  integration.
+- **Acoustic diarisation.** Speaker labels come from the transcript source.
+  Overlap detection is arithmetic on timings, not voice separation (D-047).
+- **Noisy-environment handling.** The browser's `echoCancellation`,
+  `noiseSuppression` and `autoGainControl` are requested on the stream — that is
+  the browser's work, not ours. No acoustic preprocessing of our own.
+- **Multi-device capture.** One recorder, one stream. Merging two devices needs
+  clock alignment across them.
+- **Multilingual medical terminology.** Code-switched speech is carried through
+  faithfully and tagged, but `features.py` recognises English clinical terms
+  only — a Malay symptom description is stored and shown correctly but is not
+  tagged as a clinical entity.
+- **Streaming transcription.** Upload-then-process; no live partial transcripts.
+- **Consent artefact on patient recordings.** The clinician is a party to a
+  patient-made recording and is never asked. Not modelled at all.
+- **Audio content scanning.** MIME type and size are checked; file content is
+  not scanned or transcoded.
+
+### Trying it
+
+```bash
+python scripts/phase5_smoke.py     # 31 checks over real HTTP, no server needed
+pytest tests/test_voice_capture.py -v
+```
+
+In the UI: log in as `clinician_a`, open a patient, and use **Ambient consult
+capture**. Then log in as `patient_a` to see the patient-side recorder and the
+receipt it returns.
+
+---
+
 ## Security posture at a glance
 
 > **This build is not safe for real PHI as-is.** It is a prototype on synthetic
@@ -556,6 +746,16 @@ after a decay pass.
 | Applying data decay | Implemented — admin-only, `dry_run` by default |
 | Per-user normalisation of learning signals | **Known gap** — one enthusiast counts as consensus |
 | `Version` snapshots not compressed by decay | **Known gap** — cold is a hot-row optimisation only |
+| Audio never persisted | Implemented — in memory only; asserted against the database, not the serialiser |
+| Un-redacted audio egress | Implemented (fail-closed gate) — remote ASR refuses without explicit opt-in and does not degrade to the stub |
+| Simulated transcription disclosed | Implemented — flag reaches entry card, transcript panel and API payload |
+| Capture view boundary (patient ↔ clinical) | Implemented — checked against role server-side; entry type derived from the token |
+| Transcripts withheld from patients | Implemented — including their own recording (D-049) |
+| Service worker never caches `/api` | Implemented — shell-only cache (D-053) |
+| Real speech recognition | **Known gap** — the default recogniser is a simulated stub |
+| Acoustic diarisation | **Known gap** — speaker labels come from the transcript source |
+| Consent artefact on patient recordings | **Known gap** — the clinician is a party and is never asked |
+| Audio content scanning | **Known gap** — MIME and size checked; content not scanned or transcoded |
 
 Full reasoning, including why content is deliberately **not** HTML-escaped
 before storage (clinical text contains `BP <120/80` and `dose <5mg`, and

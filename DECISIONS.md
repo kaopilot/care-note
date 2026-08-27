@@ -896,3 +896,255 @@ would have been a more impressive line in the brief and a false one.
 * Whether promoted content actually shortens a clinician's time-to-decision is
   the outcome the whole feature exists for, and it is not measurable from inside
   the system. It needs instrumented users.
+
+---
+
+## Phase 5 — Ambient consult capture (2026-08-27)
+
+Voice capture is a bonus, and it is the phase where the build's central rule —
+*redact before the text leaves* — meets the one input it cannot be applied to.
+Most of what follows is about handling that honestly rather than pretending it
+away.
+
+### D-045 · Audio is never persisted, anywhere
+
+Recordings arrive in memory, are transcribed, and are dropped when the request
+ends. Nothing writes them to disk, to the database, or to a log.
+
+A voice is biometric identifying data. It is PHI before a single word of it is
+recognised, and unlike text there is no redacted form of it to keep — a
+de-identified recording is not a thing that exists. Every other identifier in
+this system has a placeholder; audio has only deletion.
+
+Storing it would also have bought nothing the product needs. The clinician reads
+the summary and, when they doubt it, the transcript. Re-listening is a
+correction workflow for a system that expects to be wrong often enough to need
+one, which is a different product.
+
+`CaptureSession` records `audio_bytes_received` and `audio_retained` (always
+false) so the claim is a stored fact a test can assert against rather than a
+sentence in a README. `test_audio_is_never_retained` walks every column on the
+row looking for the bytes.
+
+**Cost:** a mis-transcription cannot be re-checked against what was actually
+said. The transcript is the record, and if the recogniser mangled a dose, the
+evidence that it did is gone. In production this is the trade to revisit first,
+probably as short-retention encrypted audio with a hard TTL — but that needs a
+retention policy, a key management story and a legal basis, none of which a
+72-hour prototype should invent.
+
+### D-046 · The stub recogniser announces that it is simulated
+
+With no ASR provider configured, `_SimulatedProvider` returns a deterministic
+fixture transcript. It cannot hear. Every capture it produces sets
+`transcription_simulated = true`, and that flag reaches the entry card, the
+transcript panel and the API payload's `notice` string.
+
+The alternative — a stub that quietly emits plausible clinical text — would have
+demoed better and been indefensible. This is a build whose entire argument is
+that a clinician can tell where a claim came from. A recogniser that fabricates
+a transcript and lets the interface imply speech recognition happened is the
+exact failure the product exists to prevent, committed by the product itself.
+
+Same reasoning as D-031, where offline summarisation reports
+`model_used = offline-extractive-v1` rather than borrowing a model's name.
+
+### D-047 · Overlap detection is arithmetic on timings, not diarisation
+
+A segment starting before the previous one ended is two people talking at once.
+That is computed, flagged in the transcript panel, and counted on the capture
+row. It is worth surfacing because overlapping speech is where recognisers make
+their worst mistakes, and a clinician reading a garbled line benefits from
+knowing why it is garbled.
+
+It is **not** acoustic diarisation. Nothing here separates voices from a mixed
+waveform. Speaker labels come from whatever produced the turns — the simulated
+recogniser, or the uploaded transcript's own labels. Real diarisation is a model
+(pyannote, or a recogniser with speaker turns built in) and belongs behind the
+`local` ASR provider when that is implemented.
+
+The distinction matters because "speaker-labelled transcript" in the brief could
+be read as a claim to diarisation, and this build does not have one. Stated here
+and in the README gap list rather than left for a reviewer to discover.
+
+### D-048 · Attribution is established by matching, never by self-citation
+
+The obvious way to link a summary line to its source is to have the summariser
+emit citations. It is also the way that produces confident, checkable-looking
+pointers to segments that do not support the line: models hallucinate citations
+at least as readily as they hallucinate content.
+
+A false citation is worse than no citation, because it survives review. A
+clinician who clicks through and lands on a real-looking segment has been given
+*more* confidence in a wrong line, not less. That inverts the whole point.
+
+So `services/attribution.py` establishes links after the fact by comparing the
+generated summary against the stored segments:
+
+| match | meaning | evidence |
+|---|---|---|
+| `verbatim` | the segment's words appear in the line, whitespace-normalised | re-derivable by anyone; nobody has to trust the summariser |
+| `derived` | ≥55% of the line's distinctive words are shared with one segment | weaker, and labelled differently in the UI |
+| *(no row)* | neither test passes | the line shows no source |
+
+The offline extractive summariser selects real utterances, so `verbatim` is the
+common case on the default path — 7 of 7 lines on the demo consult. A live model
+that paraphrases will produce more `derived` links and more unattributed lines,
+and the coverage figure reported alongside the note will drop accordingly. That
+is the correct behaviour: a note where three of eight lines trace to spoken words
+is a different object from one where all eight do, and the clinician holding it
+should be able to tell which.
+
+**Cost:** a line that faithfully synthesises three separate segments gets no
+attribution, because it matches none of them well enough. Under-claiming is the
+right direction to fail in, but it is a real loss of recall, not a free win.
+
+### D-049 · Transcripts are clinical-roles-only, including a patient's own
+
+A patient may record — the brief asks for patient voice capture explicitly — and
+gets back a receipt confirming what was sent, not the transcript and not the
+clinical summary written from it.
+
+The brief already says a patient cannot view raw AI-scribed notes. A raw
+transcript is strictly more raw. And a consult recorded *in the patient view*
+captures the clinician's half of the conversation too: serving it back would
+route straight around the patient-facing filter that every other read path in
+this build enforces carefully, and it would do so with the least-reviewed text
+in the system.
+
+This is least-privilege applied to a genuinely uncomfortable case — it is the
+patient's own voice, in their own appointment, and they are refused it. Recorded
+as a decision rather than buried, because a reviewer may reasonably disagree.
+The counter-argument (patients have a right of access to their own record, and
+in most jurisdictions a legal one) is real; the answer in production is a
+subject-access request through a reviewed process, not an API endpoint that
+hands over unreviewed clinical speech.
+
+### D-050 · The name gazetteer expands to name parts (defect found in Phase 5)
+
+`redact_phi_detailed`'s docstring stated that a caller-supplied gazetteer
+catches "bare first-name mentions in prose". It did not. The gazetteer only ever
+held full display names, so `"Hi Amira"` and `"Rahman said"` passed through
+untouched — **including in Phase 2's own nurse-consult fixture**, which opens
+with `Hi {first}`.
+
+Found while running the first voice fixture through the pipeline and reading the
+output. Two identifiers were redacted where three should have been.
+
+Fixed inside `_Redactor.__init__` rather than at the call sites, so every present
+and future caller gets it and none can forget — the same structural argument as
+the redaction chokepoint itself. Titles and connectors are excluded, so `Dr Lim`
+contributes `Lim` and not `Dr`.
+
+**Cost:** more false positives. A clinic user named "Serene" means the word
+*serene* is now redacted in prose. That is the correct direction for a redaction
+boundary to err in, and it is a known limitation of a gazetteer approach rather
+than a bug in this fix.
+
+### D-051 · `start` and `stop` were too broad to be action cues (defect)
+
+`ACTION_CUES` matched the bare verbs `start` and `stop`. In written clinical
+notes this is mostly fine. In transcribed *speech* it is not: `"before we
+start"` and `"When did it start?"` were both landing on the Glance View as
+pending medication changes.
+
+Replaced with phrase forms (`stop the`, `stop taking`, `switch you to`,
+`start you on`, …). Real medication changes still fire; temporal uses no longer
+do.
+
+The asymmetry that justifies the change: on a card designed to be read in ten
+seconds, a phantom open action costs more than a missed one. A missed action is
+still in the timeline. A phantom one spends the clinician's attention and, worse,
+teaches them the card is noise — and a Top Card nobody trusts is a Top Card
+nobody reads, which is the failure mode the whole Glance View is built against.
+
+### D-052 · No vocabulary for oedema (defect)
+
+`RED_FLAG_TERMS` had no entry for swelling or oedema, so a consult whose entire
+clinical content was ankle swelling produced a summary with no patient-reported
+section at all. Peripheral oedema is one of the commonest adverse drug effects
+in primary care and a patient describing it is describing the reason for the
+visit. Added.
+
+Recorded because it is the recall gap `features.py` warns about in its own
+docstring, caught in the wild: the vocabulary only knows what it knows, and the
+failure is silent — nothing is hidden, but nothing is promoted either.
+
+### D-053 · The service worker caches the app shell and never the API
+
+Making the app installable needs a service worker. The default recipe every
+offline-first guide reaches for is "cache API GETs so it works on a bad
+connection". Applied here that would write consult summaries, staff notes and
+transcript segments into the Cache Storage API — an origin-scoped store that
+survives logout, survives the 60-minute token expiry, and is readable by any
+script running on the origin.
+
+That would undo D-016. The point of putting the session token in an httpOnly
+cookie was that an injected script should not be able to read durable secrets;
+caching the clinical data those secrets protect hands the script the data
+directly and saves it the trouble of stealing anything.
+
+So `/api` is network-only and never written to a cache. The shell — HTML, JS,
+CSS, containing no patient data — is cached, which is the part that actually
+matters for ambient capture: the recorder is local, and the upload can wait for
+signal.
+
+Registered in production builds only. In dev, Vite serves modules a caching
+worker fights with, and stale-bundle confusion costs more than the feature is
+worth while iterating.
+
+### D-054 · Every AI-scribed note gets line-level attribution, not just captures
+
+Attribution runs inside `run_scribe` rather than in the capture path. The
+Phase 2 fixture scribe already wrote `TranscriptSegment` rows; the matching is
+the same work, so it gets the same provenance.
+
+Consequently `GET /captures/{session_id}` is keyed on the **segments**, not on a
+`CaptureSession` row. Every AI-scribed note has a transcript behind it; only a
+recording has a duration, a recogniser and a byte count. Keying on the capture
+row made the endpoint report "no transcript is stored" for notes whose
+transcript was sitting right there. `capture` comes back `null` for a fixture
+session and the client omits that header.
+
+### Deliberately not built in Phase 5
+
+Listed so the gap is a decision rather than a discovery. All of these are in the
+README's gap list too, in the same words.
+
+* **Real speech recognition.** `_LocalWhisper` is a documented interface with
+  `NotImplementedError` in its body, not a half-wired integration. Adding
+  faster-whisper is a model download and a `transcribe()` call, and it changes
+  that class and nothing else — but claiming it in a brief without having run it
+  is exactly the kind of assertion this build refuses elsewhere.
+* **Acoustic diarisation.** See D-047. Speaker labels come from the transcript
+  source, not from separating voices.
+* **Noisy-environment handling.** The browser's `echoCancellation`,
+  `noiseSuppression` and `autoGainControl` constraints are requested on the
+  media stream, which is genuine but is the browser's work, not ours. No
+  acoustic preprocessing of our own.
+* **Multi-device capture.** One recorder, one stream. Merging two devices'
+  audio needs clock alignment across them, which is a real distributed-systems
+  problem and not a UI one.
+* **Multilingual medical terminology.** Code-switched speech is carried through
+  redaction, storage and summarisation intact and tagged per segment
+  (`en-ms` in the fixtures), which is demonstrable. What is *not* built is
+  translation or a non-English clinical vocabulary — `features.py` tags English
+  terms only, so a Malay symptom description is stored and shown faithfully but
+  is not recognised as a clinical entity. Consistent with D-019, which deferred
+  multilingual patient summaries for the same reason.
+* **Streaming transcription.** Capture is upload-then-process. Live partial
+  transcripts during a consult are a websocket and a different UX.
+
+### Open questions carried out of Phase 5
+
+* The `derived` match threshold (0.55) was set by hand against fixtures. It has
+  never been tuned against real model output, because the default path produces
+  verbatim matches and the live path has not been run at volume. It is a
+  plausible number, not a validated one.
+* Whether clinicians would actually open the transcript panel, or whether the
+  confidence chip alone is what they act on, is unmeasurable from inside the
+  system and would change what is worth building next.
+* Patient-recorded consults raise a consent question this build does not model
+  at all: the clinician is a party to that recording and is never asked. A
+  production system needs a consent artefact on the capture, and probably a
+  visible indicator in the clinical view that a patient recording exists.

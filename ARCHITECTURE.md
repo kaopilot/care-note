@@ -681,3 +681,168 @@ paid to keep the read path clean.
 `POST /clinic/learning/rebuild` and `POST /clinic/decay/run` are deliberately
 **not** on any user-facing path. Both are administrative operations whose cost
 scales with clinic size, and neither is called during a consult.
+
+---
+
+## Phase 5 components — ambient consult capture
+
+### The one place the redaction rule cannot apply
+
+Everywhere else in this system the rule is *redact before the text leaves*, and
+`llm_client.complete()` enforces it structurally: no code path reaches a model
+without passing through `redact_phi()` first.
+
+That rule **cannot be applied to audio**. `redact_phi()` is regex over text, and
+there is no regex over a waveform. To redact a consult recording you must first
+know what was said, and knowing what was said *is* transcription. The ordering
+is forced:
+
+```
+  audio ──► transcribe ──► redact ──► summarise
+             ▲
+             └─ whoever does this hears the patient say their own name,
+                in their own voice, before any identifier is removed
+```
+
+A voice is itself biometric identifying data, so the recording is PHI before a
+single word of it is recognised. There is no clever fix — only a choice about
+*who transcribes*. `app/ai/asr_client.py` makes that choice explicit and refuses
+to make it silently:
+
+| Provider | Where it runs | Audio leaves the box? | Status |
+|---|---|---|---|
+| `stub` (default) | in-process | never | implemented; flags every capture `simulated` |
+| `local` | sidecar inside the trust boundary | never | documented interface, `NotImplementedError` body |
+| `remote` | third-party vendor | **yes, un-redacted** | gated; refuses without explicit opt-in |
+
+The gate is the design point. `remote` raises `AudioEgressBlocked` unless
+`CARENOTE_ASR_ALLOW_AUDIO_EGRESS=true`, and it **fails closed** — it does not
+degrade to the stub. A security control that silently downgrades into a working
+request is one nobody ever notices is off.
+
+### Capture pipeline
+
+```
+  ┌─────────────────────────┐
+  │ PWA (mobile or laptop)  │   MediaRecorder ─┐
+  │  or audio file upload   │                  │
+  │  or pasted transcript   │ ─────────────────┤
+  └─────────────────────────┘                  │
+                                               ▼
+                              POST /patients/{id}/capture   (multipart)
+                                               │
+                        role + clinic checked together (require_access)
+                        capture kind checked against the caller's VIEW
+                                               │
+                          ┌────────────────────┴───────────────────┐
+                    audio │                                        │ transcript
+                          ▼                                        ▼
+                asr_client.transcribe()                    capture.parse_transcript()
+                 · egress gate                              · JSON or speaker-labelled text
+                 · audio dropped after                      · no recogniser credited
+                          └────────────────────┬───────────────────┘
+                                               ▼
+                                       list[Turn]   ← the Phase 2 contract, unchanged
+                                               │
+                                    scribe.run_scribe()   ← untouched by Phase 5
+                                               │
+                    redact_phi per turn ──► llm_client ──► structured summary
+                                               │
+                    Entry (author_role=system) + AIScribedNote
+                    + TranscriptSegment[]  (stored already redacted)
+                    + SummaryAttribution[] (line ──► segment)
+                    + Highlight[]
+```
+
+The load-bearing fact: **Phase 5 added no new AI path.** Voice capture converts
+a recording into the same `list[Turn]` that Phase 2's fixtures produce, and
+hands it to the same `run_scribe`. Redaction, summarisation, provenance,
+highlight generation, versioning and RBAC behave exactly as they already did,
+and are covered by tests that already existed. Phase 0 modelling transcripts as
+speaker-labelled turns with timings and confidence — rather than as flat text —
+is what made this a source-swap instead of a parallel pipeline.
+
+### Entry type is derived from the token, not the request
+
+`capture.interaction_type_for(kind, role)` decides what kind of encounter a
+recording becomes:
+
+| Caller role | `kind` accepted | Entry type produced |
+|---|---|---|
+| `patient` | `patient` only | `ai_patient_session_summary` |
+| `staff` | `clinical` only | `ai_nurse_consult_summary` |
+| `clinician` | `clinical` only | `ai_doctor_consult_summary` |
+| `admin` | none — refused by the dependency | — |
+
+There is no field on the request that could enter a recording into the record as
+a different kind of encounter than the one the caller was actually in. The
+brief's "patient capture in patient view, clinical capture in clinical view" is
+therefore a server-side fact, not a matter of which button the client draws.
+
+### Provenance back to spoken segments
+
+`services/attribution.py` links each summary line to the transcript segment that
+produced it, **by matching after the fact rather than by asking the summariser
+to cite itself**. The reasoning is in D-048; the short version is that models
+hallucinate citations as readily as content, and a citation that looks checkable
+and is wrong leaves a clinician more confident in a bad line, not less.
+
+A `verbatim` link is re-derivable by anyone: the segment's words are in the
+line. A `derived` link survived rewording and is labelled as weaker. A line that
+matches nothing gets no row, and the interface says so. Coverage is reported
+alongside the note, because a summary where 3 of 8 lines trace to spoken words
+is a different object from one where all 8 do.
+
+On the default offline path the demo consult attributes 7 of 7 lines verbatim.
+
+### Signals read from the timings
+
+Overlapping speech, per-segment confidence and code-switching are surfaced in
+the transcript panel. Overlap is arithmetic — a segment starting before the
+previous one ended — and is flagged because overlapping speech is where
+recognisers fail worst. It is **not acoustic diarisation**; speaker labels come
+from the transcript source, never from separating voices in a mixed waveform
+(D-047).
+
+Confidence reuses the Glance View's `ConfidenceChip` and its 0.6 threshold
+rather than inventing a second visual language for "the machine is unsure". One
+idea, one vocabulary.
+
+### The service worker's caching policy is a privacy control
+
+Making the app installable needs a service worker. The default offline-first
+recipe — cache API GETs — would write consult summaries, staff notes and
+transcript segments into the Cache Storage API: origin-scoped, surviving logout
+and the 60-minute token TTL, readable by any script on the origin.
+
+That would undo the reasoning behind D-016. Putting the token in an httpOnly
+cookie was meant to stop an injected script reading durable secrets; caching the
+clinical data those secrets protect hands the script the data directly.
+
+`/api` is therefore network-only and never cached. Only the app shell — HTML,
+JS, CSS, no patient data — is cached, which is the part that actually helps
+ambient capture: the recorder is local, and the upload can wait for signal.
+
+### Security posture — Phase 5 additions
+
+| Control | Status | Note |
+|---|---|---|
+| Audio never persisted | **implemented** | In memory only, dropped at end of request. `audio_retained` stored as a fact; `test_audio_is_never_retained` walks every column looking for the bytes. |
+| Un-redacted audio egress | **implemented (fail-closed gate)** | `remote` ASR raises `AudioEgressBlocked` without explicit opt-in and does not downgrade to the stub. Both directions tested. |
+| Simulated transcription disclosed | **implemented** | `transcription_simulated` reaches the entry card, transcript panel and API `notice`. |
+| Capture view boundary | **implemented** | Patient↔clinical kind checked against role server-side; entry type derived from the token. |
+| Transcripts withheld from patients | **implemented** | Including a patient's own recording — it contains the clinician's half (D-049). |
+| Segment text redacted at rest | **implemented** | Asserted against the DB, not the serialiser. |
+| Service worker never caches `/api` | **implemented** | Network-only for API; shell-only cache (D-053). |
+| Stored-XSS scan covers shipped JS outside `src/` | **implemented** | Extended in Phase 5 when `public/sw.js` became the first such file; verified by planting an offender. |
+| Real speech recognition | **known gap** | The default recogniser is a simulated stub. No audio has ever been transcribed by this build. |
+| Acoustic diarisation | **known gap** | Speaker labels come from the transcript source (D-047). |
+| Consent artefact on patient recordings | **known gap** | The clinician is a party to a patient-made recording and is never asked. Not modelled at all. |
+| Audio upload virus/format scanning | **known gap** | MIME and size are checked; content is not scanned or transcoded. |
+
+### Latency — unchanged
+
+The Glance View P95 figure in *Latency* above still stands. Capture is a write
+path, and a slow one (transcription plus summarisation), but it adds nothing to
+the read path being measured. The transcript panel is lazy-loaded on click and
+is not part of the Glance View render.
