@@ -118,7 +118,14 @@ def resolve(db: Session, pointer: str, *, clinic_id: str | None = None) -> dict[
             "timestamp": entry.timestamp,
         }
         if parsed.fragment_kind == "span":
-            content = entry.content or ""
+            # Offsets were computed against the entry's full text. A cold entry
+            # holds a shorter summary in `content`, so resolving against that
+            # would land on different words — or fall off the end and report a
+            # dangling pointer for a highlight that is perfectly valid. The
+            # archive is the offset frame of reference; see services/decay.py.
+            from app.services.decay import original_content
+
+            content = original_content(db, entry)
             if parsed.span_end > len(content):
                 raise ProvenanceError(
                     f"span {parsed.span_start}-{parsed.span_end} exceeds entry length "

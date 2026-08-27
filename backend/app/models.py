@@ -128,6 +128,9 @@ class Entry(Base):
     # Phase 4 data decay
     decay_state: Mapped[DecayState] = mapped_column(String(20), default=DecayState.HOT)
     decayed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when a clinician manually restores a compressed entry, so the next
+    # scheduled decay pass does not immediately undo their action (D-043).
+    decay_hold_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Conflict flagging (shared-context conflict rule; see DECISIONS.md D-007)
     conflict_flagged: Mapped[bool] = mapped_column(Boolean, default=False)

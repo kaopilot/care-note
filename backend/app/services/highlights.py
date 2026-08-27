@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.core.enums import AI_SCRIBED_TYPES, EntryType, HighlightStatus, Role
+from app.core.enums import AI_SCRIBED_TYPES, DecayState, EntryType, HighlightStatus, Role
 from app.core.provenance import entry_pointer
 from app.models import Entry, Highlight, Task, Version
 from app.services import features, scoring
@@ -75,8 +75,16 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
         if h.status in (HighlightStatus.ACCEPTED, HighlightStatus.REJECTED)
     }
 
+    # A cold entry holds a compressed summary in `content` (services/decay.py).
+    # Generating new spans against it would mint provenance pointers whose
+    # offsets index the summary while every existing pointer indexes the
+    # original — two incompatible frames of reference in one table. Existing
+    # highlights are still rescored below, so a cold entry keeps moving with
+    # recency and learned weight; it just stops producing new claims.
+    cold = str(entry.decay_state) == str(DecayState.COLD)
+
     candidates: list[tuple[float, dict]] = []
-    for start, end, span_text in features.sentences(entry.content or ""):
+    for start, end, span_text in ([] if cold else features.sentences(entry.content or "")):
         span_tags, reasons = features.tag_span(span_text)
         if not reasons:
             continue  # rule 1: no reason, no highlight
@@ -215,6 +223,15 @@ def create_manual_highlight(
     It is also the strongest single signal Phase 4 has, which is why the caller
     pairs this with a `MANUAL_HIGHLIGHT` interaction row.
     """
+    if str(entry.decay_state) == str(DecayState.COLD):
+        # The clinician is looking at a summary, so their character offsets
+        # index different text from every other pointer on this entry. Restore
+        # first — one click, and it is a truthful refusal rather than a
+        # highlight that silently points at the wrong words.
+        raise ValueError(
+            "this entry is archived; restore it to full text before highlighting"
+        )
+
     content = entry.content or ""
     span_start = max(0, min(span_start, len(content)))
     span_end = max(span_start, min(span_end, len(content)))
