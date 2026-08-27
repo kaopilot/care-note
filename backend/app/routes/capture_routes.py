@@ -191,15 +191,18 @@ async def create_capture(
 
     # The view boundary from the brief, enforced server-side. A patient may only
     # produce a patient capture; a clinical user may only produce a clinical one.
+    # Each message names the capture that was refused, not the caller's own
+    # view — "you asked for X and X is not available here" is actionable;
+    # "you are a patient" is a fact they already knew.
     if scope.role is Role.PATIENT and kind is not CaptureKind.PATIENT:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Patient voice capture is available only in the patient view",
+            detail="Clinical voice capture is available only in the clinical view",
         )
     if scope.role in (Role.STAFF, Role.CLINICIAN) and kind is not CaptureKind.CLINICAL:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Clinical voice capture is available only in the clinical view",
+            detail="Patient voice capture is available only in the patient view",
         )
 
     audio_bytes: bytes | None = None

@@ -149,7 +149,7 @@ def parse_transcript(raw: str) -> list[Turn]:
         raise TranscriptParseError("Transcript is empty")
 
     turns = _parse_json_transcript(cleaned)
-    if turns is None:
+    if not turns:
         turns = _parse_text_transcript(cleaned)
     if not turns:
         raise TranscriptParseError(
@@ -164,15 +164,24 @@ def parse_transcript(raw: str) -> list[Turn]:
 
 
 def _parse_json_transcript(text: str) -> list[Turn] | None:
+    """Parse a JSON array of turns, or return None if this is not JSON.
+
+    The `[` test alone is not enough to decide: a perfectly ordinary transcript
+    can open with a timestamp — "[00:05] nurse: BP is 138 over 86" — and that is
+    a common export format, not malformed JSON. So a parse failure returns None
+    and lets the text parser have it, and the caller reports an error only when
+    BOTH readings come back empty. Guessing the format from the first character
+    and then refusing to reconsider was the bug this comment replaces.
+    """
     stripped = text.strip()
     if not stripped.startswith("["):
         return None
     try:
         rows = json.loads(stripped)
-    except ValueError as exc:
-        raise TranscriptParseError(f"Transcript looks like JSON but will not parse: {exc}")
+    except ValueError:
+        return None
     if not isinstance(rows, list):
-        raise TranscriptParseError("JSON transcript must be an array of turns")
+        return None
 
     turns: list[Turn] = []
     cursor = 0
