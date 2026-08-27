@@ -91,6 +91,15 @@ RED_FLAG_TERMS: dict[str, str] = {
     "blurred vision": "neurological symptom",
     "fall": "falls risk",
     "falls": "falls risk",
+    # Peripheral oedema. Added in Phase 5: it is one of the commonest adverse
+    # drug effects in a primary-care population (calcium channel blockers), and
+    # a patient describing it is describing the reason for the visit. Its
+    # absence meant a consult whose entire clinical content was ankle swelling
+    # produced a summary with no patient-reported section at all (D-052).
+    "swelling": "oedema",
+    "swollen": "oedema",
+    "oedema": "oedema",
+    "edema": "oedema",
 }
 
 ALLERGY_TERMS: tuple[str, ...] = ("allergy", "allergic", "anaphylaxis", "intolerance", "rash to")
@@ -126,8 +135,21 @@ ACTION_CUES: dict[str, str] = {
     "counsel": "counselling due",
     "titrate": "titration pending",
     "hold one dose": "medication change",
-    "stop": "medication change",
-    "start": "medication change",
+    # "start" and "stop" were bare verbs here until Phase 5's voice fixtures ran
+    # through this vocabulary and put "before we start" and "When did it start?"
+    # on the Glance View as pending medication changes. The bare forms match the
+    # temporal sense of the word, which is by far the commoner one in speech —
+    # transcripts are full of things starting and stopping that are not drugs.
+    # A phantom open action costs more than a missed one here: the Top Card is
+    # read in ten seconds and its authority depends on everything on it being
+    # real. See DECISIONS.md D-051.
+    "stop taking": "medication change",
+    "stop the": "medication change",
+    "start taking": "medication change",
+    "start you on": "medication change",
+    "started on": "medication change",
+    "switch you to": "medication change",
+    "switch to": "medication change",
 }
 
 # Hedging. Used to derive a confidence figure for offline summaries, and to
