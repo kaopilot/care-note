@@ -94,6 +94,13 @@ export const Api = {
   manualHighlight: (entryId, payload) => api(`/entries/${entryId}/highlights`, body(payload)),
   resolveProvenance: (pointer) => api(`/provenance?pointer=${encodeURIComponent(pointer)}`),
 
+  learning: () => api('/clinic/learning'),
+  rebuildLearning: () => api('/clinic/learning/rebuild', { method: 'POST' }),
+  decayPreview: () => api('/clinic/decay/preview'),
+  runDecay: (dryRun = true) => api(`/clinic/decay/run?dry_run=${dryRun}`, { method: 'POST' }),
+  restoreEntry: (entryId) => api(`/entries/${entryId}/restore`, { method: 'POST' }),
+  entryArchive: (entryId) => api(`/entries/${entryId}/archive`),
+
   scribeTemplates: () => api('/scribe/templates'),
   runScribe: (patientId, interactionType) =>
     api(`/patients/${patientId}/scribe`, body({ interaction_type: interactionType })),

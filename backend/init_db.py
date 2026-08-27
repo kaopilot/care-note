@@ -32,14 +32,28 @@ from app.core.db import Base, SessionLocal, engine
 from app.core.enums import (
     CommentStatus,
     EntryType,
+    InteractionAction,
     InteractionType,
     RiskLevel,
     Role,
     TaskStatus,
 )
 from app.core.provenance import entry_pointer, session_pointer
-from app.models import AIScribedNote, Clinic, Comment, Entry, Patient, Task, User, Version
+from app.models import (
+    AIScribedNote,
+    Clinic,
+    Comment,
+    Entry,
+    FeatureWeight,
+    InteractionLog,
+    Patient,
+    Task,
+    User,
+    Version,
+)
+from app.services import decay, learning
 from app.services import highlights as highlight_service
+from app.services.interactions import record_interaction
 from app.security.auth import hash_password
 
 # Seed password for every demo account. Dev fixture only — see README.
@@ -107,6 +121,77 @@ def _add_entry(
     db.flush()
     entry.current_version_id = version.id
     return entry
+
+
+def _seed_interaction_history(db) -> None:
+    """Six months of prior clinical attention in clinic A, as real log rows.
+
+    This is what a clinic that has been using the product for a while looks
+    like. The pattern is deliberate rather than random, and it is the story the
+    demo tells:
+
+    * **Anticoagulation gets attention.** Repeated hand-highlighting and
+      confirmation of warfarin and bleeding-risk content, spread over months.
+      This clinic has an anticoagulation clinic and it shows in the ranking.
+    * **Routine BP readings get dismissed.** Suggestions about elevated blood
+      pressure were rejected several times — not because BP does not matter,
+      but because in this clinic it is already handled by a nurse-led pathway
+      and does not need to be on a doctor's top card.
+    * **Allergy content was dismissed too, twice.** Included on purpose: it is
+      the case where the system must refuse to learn. `NEVER_DAMPENED` floors
+      that weight at zero, and `GET /clinic/learning` shows the two negative
+      signals alongside a weight of 0.0 — the evidence stays visible, the
+      behaviour does not follow it.
+
+    Dates are spread so the 90-day evidence half-life does visible work: the
+    oldest signals contribute measurably less than the recent ones.
+    """
+    history: list[tuple[int, str, InteractionAction, list[str]]] = [
+        # (days ago, user, action, tags)
+        (150, "u-a-clinician", InteractionAction.MANUAL_HIGHLIGHT,
+         ["med:warfarin", "medclass:anticoagulant"]),
+        (120, "u-a-clinician", InteractionAction.ACCEPT_HIGHLIGHT,
+         ["med:warfarin", "medclass:anticoagulant", "symptom:bleeding"]),
+        (95, "u-a-staff", InteractionAction.COMMENT,
+         ["med:warfarin", "finding:inr_out_of_range"]),
+        (60, "u-a-clinician", InteractionAction.MANUAL_HIGHLIGHT,
+         ["symptom:bleeding", "medclass:anticoagulant"]),
+        (40, "u-a-clinician", InteractionAction.ACCEPT_HIGHLIGHT,
+         ["med:warfarin", "finding:inr_out_of_range"]),
+        (21, "u-a-clinician", InteractionAction.MANUAL_HIGHLIGHT,
+         ["symptom:numbness", "symptom:tingling"]),
+        (14, "u-a-staff", InteractionAction.COMMENT,
+         ["symptom:tingling", "entity:open_action"]),
+        (9, "u-a-clinician", InteractionAction.ACCEPT_HIGHLIGHT,
+         ["symptom:tingling", "entity:open_action"]),
+        # Dismissals: routine BP is handled elsewhere in this clinic.
+        (75, "u-a-clinician", InteractionAction.REJECT_HIGHLIGHT, ["finding:bp_elevated"]),
+        (50, "u-a-clinician", InteractionAction.REJECT_HIGHLIGHT, ["finding:bp_elevated"]),
+        (30, "u-a-clinician", InteractionAction.REJECT_HIGHLIGHT,
+         ["finding:bp_elevated", "med:amlodipine"]),
+        # Dismissals the system must decline to learn from.
+        (45, "u-a-clinician", InteractionAction.REJECT_HIGHLIGHT, ["entity:allergy"]),
+        (20, "u-a-clinician", InteractionAction.REJECT_HIGHLIGHT, ["entity:allergy"]),
+    ]
+
+    for days_ago, user_id, action, tags in history:
+        row = record_interaction(
+            db,
+            user_id=user_id,
+            user_role=Role.CLINICIAN if user_id.endswith("clinician") else Role.STAFF,
+            clinic_id="clinic-a",
+            action=action,
+            target_type="entry",
+            target_id="entry-a1-clin",
+            tags=tags,
+            # One rebuild after the loop is cheaper than a recompute per row,
+            # and produces the identical result — that equality is asserted in
+            # test_self_learning_importance.py.
+            learn=False,
+        )
+        if row is not None:
+            row.timestamp = _now() - timedelta(days=days_ago)
+    db.flush()
 
 
 def seed(reset: bool = False) -> None:
@@ -307,9 +392,14 @@ def seed(reset: bool = False) -> None:
             entry_type=EntryType.STAFF_NOTE,
             title="Phone follow-up",
             content=(
-                "Called about missed appointment. Reports work pressure. "
-                "Rebooked. Mentioned occasional dizziness on standing - advised "
-                "to raise at next visit."
+                "Called regarding the missed review appointment on the 4th. "
+                "Patient answered and apologised, citing pressure at work and "
+                "difficulty getting time off during clinic hours. Rebooked for "
+                "the following month and offered an early morning slot. "
+                "Mentioned occasional dizziness on standing, mostly first thing "
+                "in the morning, not associated with palpitations. Advised to "
+                "raise this at the next visit. Confirmed the current metformin "
+                "supply is sufficient until then."
             ),
             days_ago=201,
         )
@@ -356,11 +446,49 @@ def seed(reset: bool = False) -> None:
         # Glance View and the product looks like it does nothing.
         for entry in db.query(Entry).all():
             highlight_service.refresh_entry_highlights(db, entry)
+        db.flush()
+
+        # -- prior clinician behaviour (Phase 4) -------------------------
+        # A learning system with an empty history demos as a system that does
+        # nothing. What is seeded here is BEHAVIOUR, not weights: real
+        # InteractionLog rows, dated, which `rebuild_clinic` then aggregates
+        # through exactly the same code path a live click goes through.
+        #
+        # Seeding FeatureWeight directly would have been three lines shorter and
+        # would have been a lie — the demo would show numbers no interaction
+        # produced, in a build whose whole argument is that surfaced claims are
+        # traceable to their source.
+        _seed_interaction_history(db)
+        learning.rebuild_clinic(db, "clinic-a")
+        for entry in db.query(Entry).all():
+            highlight_service.refresh_entry_highlights(db, entry)
 
         db.commit()
+
+        # -- data decay pass (Phase 4) -----------------------------------
+        # Run once at seed time so a reviewer's first login already shows the
+        # policy having acted: one old entry compressed, one held back because
+        # it documents an allergy. Both states visible side by side is the whole
+        # point — a demo where nothing is protected proves only half the design.
+        report = decay.run(db, clinic_id="clinic-a", dry_run=False)
+        compressed = [
+            change["entry_id"] for change in report["changes"]
+            if change["target_state"] == "cold"
+        ]
+        held = [
+            change["entry_id"] for change in report["changes"] if change["protected"]
+        ]
+
         print("Seeded 2 clinics, 4 patients, 8 users (one per role per clinic), "
               "9 entries (1 AI-scribed), 1 open comment thread, 1 open task, "
               "and generated highlights.")
+        print(f"Phase 4: seeded {db.query(InteractionLog).count()} prior interactions; "
+              f"learned {db.query(FeatureWeight).count()} feature weights for clinic-a.")
+        print(f"Phase 4: decay compressed {len(compressed)} entr(y/ies) {compressed}; "
+              f"held {len(held)} back as still-relevant {held}.")
+        print(f"Phase 4: timeline read path for compressed entries "
+              f"{report['hot_bytes_before']}B -> {report['hot_bytes_after']}B "
+              f"(+{report['archive_bytes']}B archived, recoverable).")
         print(f"Login with any username above / password: {DEMO_PASSWORD}")
         print("Usernames: clinician_a staff_a admin_a patient_a "
               "clinician_b staff_b admin_b patient_b")

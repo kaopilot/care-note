@@ -276,11 +276,21 @@ def test_the_summary_is_a_subset_of_what_a_human_wrote(env):
         assert sentence in original_sentences
 
 
-def test_compression_actually_reduces_stored_bytes(env):
+def test_compression_reduces_the_hot_read_path_and_reports_its_own_cost(env):
+    """The saving is on the read path, and the report says so.
+
+    A single "bytes saved" figure would have flattered the feature: base64
+    inflates zlib's output by about a third, so on notes this short the archive
+    costs nearly as much as the summary saves. The hot path — what a timeline
+    load actually pulls out of `Entry` — is where the win is real, and the
+    archive cost is reported beside it rather than netted out of sight.
+    """
     db = env["db"]
     report = decay.run(db, clinic_id="clinic-a", dry_run=False)
-    assert report["bytes_saved"] > 0
-    assert report["bytes_after"] < report["bytes_before"]
+    assert report["hot_bytes_saved"] > 0
+    assert report["hot_bytes_after"] < report["hot_bytes_before"]
+    assert report["archive_bytes"] > 0, "the cold copy is not free and must be reported"
+    assert "net_storage_delta" in report
 
     archive = db.query(EntryArchive).filter(EntryArchive.entry_id == "e-old").one()
     assert archive.compression == "zlib+base64"

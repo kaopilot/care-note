@@ -164,7 +164,8 @@ def run_decay(
                     {
                         "changed": report["changed"],
                         "evaluated": report["evaluated"],
-                        "bytes_saved": report["bytes_saved"],
+                        "hot_bytes_saved": report["hot_bytes_saved"],
+                        "archive_bytes": report["archive_bytes"],
                     }
                 ),
             )

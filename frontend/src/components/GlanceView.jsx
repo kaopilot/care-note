@@ -22,6 +22,7 @@
 
 import { useState } from 'react'
 import { Api } from '../lib/api'
+import LearningPanel from './LearningPanel'
 import { entryLabel, relativeAge, shortDateTime } from '../lib/format'
 import {
   Button,
@@ -358,6 +359,11 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
               <p className="mt-1 text-xs text-slate-500">Nothing outstanding.</p>
             )}
           </div>
+
+          {/* Collapsed by default: not one of the four questions this card is
+              for, but the one a clinician asks the first time it surfaces
+              something unexpected. One click, not absent. */}
+          <LearningPanel canRebuild={canDecide} />
         </div>
       </div>
     </section>

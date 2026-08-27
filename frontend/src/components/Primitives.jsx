@@ -121,9 +121,17 @@ export function EmptyState({ title, children }) {
  * ranker that cannot explain itself is the wrong tool for a product whose
  * purpose is calibrating trust in machine output.
  */
+/**
+ * The arithmetic behind a suggestion, rendered so a clinician can read it.
+ *
+ * Negative terms are shown, not filtered out. A dampened item is one this
+ * clinic has repeatedly dismissed, and that is the most interesting thing the
+ * card can say about why something is ranked low — hiding it would leave the
+ * learning visible only when it flatters the system.
+ */
 export function ScoreBreakdown({ breakdown }) {
   const terms = Object.entries(breakdown || {}).filter(
-    ([key, value]) => key !== 'multiplier' && value > 0
+    ([key, value]) => key !== 'multiplier' && value !== 0
   )
   if (!terms.length) return null
   return (
@@ -131,7 +139,17 @@ export function ScoreBreakdown({ breakdown }) {
       {terms.map(([key, value]) => (
         <span key={key} className="whitespace-nowrap">
           <dt className="inline">{SCORE_TERM_LABEL[key] || key}</dt>
-          <dd className="ml-1 inline text-slate-700">{value.toFixed(2)}</dd>
+          <dd
+            className={`ml-1 inline ${value < 0 ? 'font-semibold text-amber-700' : 'text-slate-700'}`}
+            title={
+              value < 0
+                ? 'Ranked down: this clinic has repeatedly dismissed content like this'
+                : undefined
+            }
+          >
+            {value > 0 ? '+' : ''}
+            {value.toFixed(2)}
+          </dd>
         </span>
       ))}
     </dl>

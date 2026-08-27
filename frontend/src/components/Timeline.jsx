@@ -71,6 +71,7 @@ export default function Timeline({
   const groups = useMemo(() => groupByDate(entries), [entries])
   const canComment = ['staff', 'clinician', 'admin'].includes(session.role)
   const canHighlight = session.role === 'clinician'
+  const canRestore = ['clinician', 'admin'].includes(session.role)
 
   return (
     <section className="mt-5">
@@ -116,6 +117,7 @@ export default function Timeline({
                 users={users}
                 canComment={canComment}
                 canHighlight={canHighlight}
+                canRestore={canRestore}
                 onChanged={onChanged}
                 registerRef={registerRef(entry.id)}
               />

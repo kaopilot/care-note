@@ -122,6 +122,7 @@ export const SCORE_TERM_LABEL = {
   entities: 'Clinical entities',
   open_actions: 'Unresolved actions',
   learned: 'Learned from this clinic',
+  decay: 'Age adjustment',
   manual: 'Marked by a clinician',
   multiplier: 'Adjustment',
 }

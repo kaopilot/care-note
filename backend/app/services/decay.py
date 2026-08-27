@@ -200,6 +200,7 @@ class Verdict:
     protected: bool
     bytes_before: int = 0
     bytes_after: int = 0
+    archive_bytes: int = 0
 
 
 def _protection_reason(db: Session, entry: Entry) -> str | None:
@@ -376,8 +377,9 @@ def run(
 
     changes: list[dict] = []
     unchanged = 0
-    bytes_before = 0
-    bytes_after = 0
+    hot_before = 0
+    hot_after = 0
+    archive_bytes = 0
 
     for entry in query.all():
         verdict = classify(db, entry, now=now)
@@ -387,12 +389,17 @@ def run(
 
         record = asdict(verdict)
         if verdict.target_state == str(DecayState.COLD):
-            record["bytes_before"] = len((entry.content or "").encode("utf-8"))
-            record["bytes_after"] = len(summarise(original_content(db, entry)).encode("utf-8"))
+            original = original_content(db, entry)
+            record["bytes_before"] = len(original.encode("utf-8"))
+            record["bytes_after"] = len(summarise(original).encode("utf-8"))
+            record["archive_bytes"] = len(_pack(original)[0].encode("ascii"))
             if not dry_run:
                 applied = compress(db, entry, now=now)
                 record["bytes_before"] = applied.bytes_before
                 record["bytes_after"] = applied.bytes_after
+            hot_before += record["bytes_before"]
+            hot_after += record["bytes_after"]
+            archive_bytes += record["archive_bytes"]
         elif not dry_run:
             if verdict.current_state == str(DecayState.COLD):
                 # Moving out of cold means putting the real text back first.
@@ -400,8 +407,6 @@ def run(
             entry.decay_state = DecayState(verdict.target_state)
             entry.decayed_at = now if verdict.target_state != str(DecayState.HOT) else None
 
-        bytes_before += record.get("bytes_before", 0)
-        bytes_after += record.get("bytes_after", 0)
         changes.append(record)
 
     if not dry_run:
@@ -412,9 +417,20 @@ def run(
         "evaluated": unchanged + len(changes),
         "unchanged": unchanged,
         "changed": len(changes),
-        "bytes_before": bytes_before,
-        "bytes_after": bytes_after,
-        "bytes_saved": max(0, bytes_before - bytes_after),
+        # Two separate figures, because one of them would flatter the feature.
+        # `hot_*` is the read path: what a timeline load pulls out of `Entry`,
+        # and where compression genuinely wins — roughly 7x on the seeded note.
+        # `archive_bytes` is what the cold copy costs, and it is not free:
+        # base64 inflates zlib's output by a third, so on notes this short the
+        # archive eats almost the whole saving. Total storage only turns
+        # positive on notes of a few KB, where the compression ratio beats that
+        # overhead. Reporting a single "bytes saved" number would have hidden
+        # exactly that, so it is not reported.
+        "hot_bytes_before": hot_before,
+        "hot_bytes_after": hot_after,
+        "hot_bytes_saved": max(0, hot_before - hot_after),
+        "archive_bytes": archive_bytes,
+        "net_storage_delta": (hot_after + archive_bytes) - hot_before,
         "policy": {
             "warm_after_days": WARM_AFTER_DAYS,
             "cold_after_days": COLD_AFTER_DAYS,

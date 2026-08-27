@@ -35,6 +35,7 @@ export default function EntryCard({
   users,
   canComment,
   canHighlight,
+  canRestore,
   onChanged,
   registerRef,
 }) {
@@ -49,6 +50,10 @@ export default function EntryCard({
 
   const isAi = entry.is_ai_scribed
   const accent = ROLE_ACCENT[entry.author_role] || 'border-l-slate-300'
+  // A cold entry shows a compressed summary. The full text is one audited
+  // click away — the point of saying so on the card is that a clinician should
+  // never be reading a shortened note while believing it is the whole one.
+  const isArchived = entry.decay_state === 'cold'
 
   function captureSelection() {
     if (!canHighlight) return
@@ -101,6 +106,20 @@ export default function EntryCard({
     }
   }
 
+  async function restoreArchived() {
+    setBusy(true)
+    setError(null)
+    try {
+      await Api.restoreEntry(entry.id)
+      setNotice('Full note restored from the archive.')
+      onChanged?.()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function saveCorrection() {
     setBusy(true)
     setError(null)
@@ -147,6 +166,14 @@ export default function EntryCard({
           </Chip>
         )}
         {entry.supersedes_entry_id && <Chip tone="info">Corrects an earlier entry</Chip>}
+        {isArchived && (
+          <Chip
+            tone="neutral"
+            title="Older entry. The full text is archived and can be restored."
+          >
+            ▤ Archived — summary shown
+          </Chip>
+        )}
         <span
           className="ml-auto font-mono text-[10px] text-slate-400"
           title={shortDateTime(entry.timestamp)}
@@ -162,6 +189,20 @@ export default function EntryCard({
       <div ref={contentRef} onMouseUp={captureSelection} className="mt-1">
         <SpanText content={entry.content} emphasis={emphasis} mono={isAi} />
       </div>
+
+      {isArchived && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded bg-slate-50 px-2 py-1 ring-1 ring-slate-200">
+          <span className="text-[11px] text-slate-600">
+            This is a shortened copy. Every sentence shown was written by the author —
+            nothing has been rephrased.
+          </span>
+          {canRestore && (
+            <Button variant="quiet" disabled={busy} onClick={restoreArchived}>
+              Restore full note
+            </Button>
+          )}
+        </div>
+      )}
 
       {selection && (
         <div className="mt-1 flex items-center gap-2 rounded bg-amber-50 px-2 py-1 ring-1 ring-amber-200">
