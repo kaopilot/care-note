@@ -24,7 +24,13 @@ from app.core.sanitization import (
     sanitize_for_storage,
 )
 
-FRONTEND_SRC = Path(__file__).resolve().parents[1] / "frontend" / "src"
+FRONTEND_ROOT = Path(__file__).resolve().parents[1] / "frontend"
+FRONTEND_SRC = FRONTEND_ROOT / "src"
+# Phase 5 added the first shipped JavaScript living outside src/ — the service
+# worker in public/. Scanning only src/ would have left it unchecked, so the
+# scan follows the shipped code rather than one directory. Build output is
+# excluded: it is generated from these sources, and it is gitignored.
+FRONTEND_SCANNED = (FRONTEND_SRC, FRONTEND_ROOT / "public")
 
 
 # --------------------------------------------------------------------------
@@ -42,13 +48,11 @@ def test_frontend_never_renders_raw_html() -> None:
     """
     banned = re.compile(r"dangerouslySetInnerHTML|\.innerHTML\s*=|outerHTML\s*=")
     offenders = [
-        str(path.relative_to(FRONTEND_SRC))
-        for path in FRONTEND_SRC.rglob("*.jsx")
-        if banned.search(path.read_text())
-    ]
-    offenders += [
-        str(path.relative_to(FRONTEND_SRC))
-        for path in FRONTEND_SRC.rglob("*.js")
+        str(path.relative_to(FRONTEND_ROOT))
+        for root in FRONTEND_SCANNED
+        if root.exists()
+        for pattern in ("*.jsx", "*.js")
+        for path in root.rglob(pattern)
         if banned.search(path.read_text())
     ]
     assert not offenders, (
