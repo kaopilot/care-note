@@ -1,21 +1,66 @@
-# Care Note — Technical Brief
+# Care Note
 
-**Nightingale 72-Hour Build.** One shared, longitudinal, role-based patient
-record combining clinician notes, staff notes, patient insight and AI-scribed
-consult summaries — with a Glance View, full provenance, revision history and
-server-enforced RBAC. **Synthetic data only; not safe for real PHI as-is** (§6).
+**Nightingale 72-Hour Build.** **Synthetic data only; not safe for real PHI
+as-is** (§7).
 
-## 1. Thesis
+## 1. What Care Note is, and how we approached it
 
-The brief's hardest sentence is a question: *we trust LLMs up to a point, then
-we need reassurance from clinicians.* A summariser is easy; one a clinician
-should rely on mid-consult is the actual problem. Everything follows from one
-position — **AI output enters this system as a claim, not a fact.** A claim has
-a source you can open, a confidence you can see, a human who can accept or
-reject it, and no power to overwrite what a clinician wrote. That is a data-model
-commitment before a UI one, which is why it is in the Phase 0 schema.
+A patient's story is currently scattered across dated free-text notes, each
+written by a different person in a different screen. Nobody holds the whole
+thread. A clinician opening a chart before a consult is reconstructing months of
+history by scrolling and guessing what matters.
+
+**Care Note replaces that with one shared, longitudinal record per patient.**
+Clinician notes, nurse and staff notes, the patient's own contributions, and
+AI-scribed summaries of every consult all land in a single timeline, each entry
+carrying who wrote it, when, and what it came from. On top sits a **Glance
+View** — a top card designed to be read in under ten seconds: what changed since
+you last looked, what could hurt this patient, what matters and why, what is
+outstanding and whose it is.
+
+Four commitments shaped every decision, and they pull against each other in
+ways worth being explicit about.
+
+**It has to be safe.** These are medical records. Access control is fused to
+both role and clinic and enforced server-side, never in the UI. Every piece of
+text that reaches a model passes one redaction chokepoint that strips names,
+identifiers and phone numbers, re-scans its own output, and refuses to send
+rather than leak. Logs carry IDs and actions, never content.
+
+**It has to be fast.** A clinician sees a great many patients in a day, and a
+tool that costs thirty seconds per chart costs hours per week. The Glance View
+is measured, not asserted: P95 server handling of ~11 ms against a 300 ms
+budget (§4).
+
+**It has to be worth adopting.** Nobody adopts software that makes their job
+harder, and clinical staff have every reason to be sceptical. So the system
+tries to *remove* work rather than add process: confirming or dismissing a
+suggestion is one click without leaving the card, the AI writes the consult
+summary nobody wanted to type, and role-based views mean each person sees their
+own job rather than everyone's. The patient view is written in plain language
+for an anxious reader, not clinical shorthand.
+
+**And the AI has to be continuously verifiable.** This is the constraint that
+shapes the architecture, because in this domain neither direction of error is
+acceptable — a false positive trains staff to ignore the system, and a false
+negative is a missed allergy. We do not think that is solved by a better model.
+It is handled by treating **AI output as a claim, not a fact**: every claim has
+a source you can open, a confidence measured from evidence rather than
+self-reported, a human who can accept or reject it in one click, and no power to
+overwrite what a clinician wrote. Where the system cannot support a claim, it
+**abstains** — an untraceable summary line gets no citation rather than a
+plausible-looking one. That is a data-model commitment before a UI one, which is
+why it sits in the schema (§3) rather than in a component.
 
 ## 2. Architecture
+
+*A React client talking to a FastAPI backend over SQLite. Two things in the
+diagram do the real work: `require_access()`, the single door every request
+enters through, and `llm_client.complete()`, the single door every outbound
+piece of text leaves through. Everything else is ordinary. Both are chokepoints
+by design — a rule enforced in one place that nothing can route around is worth
+more than the same rule written correctly in forty handlers.*
+
 
 ```
   Browser (React SPA) ── UI gating is convenience only; assumed compromised
@@ -61,7 +106,15 @@ or removes the redaction call.
 
 ## 3. Schema
 
-`Entry` is the hub. Every relationship the brief names hangs off it.
+*`Entry` — one item on the patient's timeline — is the hub, and every
+relationship the requirements name hangs directly off it. Versions give
+revision history, Comments give collaboration, Highlights give the Glance View
+its content, and `AIScribedNote` is what marks an entry as machine-authored.
+Provenance is the one deliberate exception to normal database design: it is a
+string URI rather than a foreign key, because the things a citation points at
+are not all rows in one table. The learning mechanism reads from the same
+graph and is constrained by it, described at the end of this section.*
+
 
 | Link | Mechanism |
 |---|---|
@@ -107,13 +160,20 @@ anaphylaxis and self-harm tags are floored at zero.
 
 ## 4. Glance View and latency
 
+*The Glance View is the product's core claim: that a clinician can be oriented
+in under ten seconds. Two things make that possible, and both are subtractive.
+The card **refuses to show most of what it knows** — a top card containing
+everything is just the timeline again — and expensive work happens on write
+rather than on read, so opening a chart is mostly a database read of
+precomputed rows. The latency figure below is evidence for that design choice
+rather than a boast about speed.*
+
+
 The Top Card answers four questions in fixed order: what changed since you were
 last here; what could hurt this patient; what matters and why; what is
-outstanding and whose it is. **Refusing to surface things is what makes it
-readable in ten seconds** — a Top Card showing everything is a timeline with
-extra steps. Ranking is a weighted sum over named features, each highlight
-showing its own arithmetic and a one-line `risk_reason`. Nothing is ranked by a
-model.
+outstanding and whose it is. Ranking is a weighted sum over named features, each
+highlight showing its own arithmetic and a one-line `risk_reason`. **Nothing is
+ranked by a model.**
 
 **Measured:** P95 ≤ 300 ms target. A middleware reports `X-Response-Time-Ms` per
 request — request in, queries run, payload serialised, response out. 200
@@ -138,6 +198,16 @@ hundreds of entries and concurrent load; the ~20× headroom makes inversion
 unlikely, but the test that settles it is a loaded staging environment.
 
 ## 5. Trust calibration, evaluation and abstention
+
+*This is the section that answers "why should a clinician believe any of this?"
+Five mechanisms, each closing a different way an AI-assisted record can lose a
+user's trust: unearned authority, invisible uncertainty, silently overwritten
+human work, contradictions nobody surfaces, and generated text reaching a
+patient. The table that follows asks the harder question of the three numbers
+we put on screen — a risk badge, a confidence label and an importance score —
+which is not what they are but how anyone would know if they were wrong, and
+what the system does when it cannot answer.*
+
 
 **1. Accept / reject.** `Highlight.status` starts `suggested` and needs a
 clinician decision; no AI claim reaches the card as fact on its own authority.
@@ -219,6 +289,14 @@ it does not close it.
 
 ## 6. Trade-offs, assumptions, deferred scope
 
+*Every decision below is one where a defensible alternative existed. They are
+recorded with reasoning rather than as a feature list, because in 72 hours the
+interesting information is what was traded away and why. `DECISIONS.md` holds
+the full log — around seventy entries, including scope deliberately cut and
+decisions later reversed. The section ends with the defects we found after
+calling the build finished, which is the part most worth reading.*
+
+
 **Regex redaction over NER (D-012).** Data is synthetic, so recall against real
 name diversity isn't what's tested — the boundary's un-bypassability is. Regex
 is auditable line by line, worth more in a trust system than F1 from an
@@ -230,7 +308,7 @@ render; tag-stripping can eat `<5mg` and silently turn a dose limit into `mg`.
 Corrupting a note is worse than the XSS it prevents — because untrusted content
 is never rendered as HTML at all, enforced by a build-failing source scan.
 
-**Assumptions where the brief is silent:** staff cannot view
+**Assumptions where the requirements were silent:** staff cannot view
 `clinician_sections` (D-004, least privilege); admin reads all in-clinic but
 authors no clinical content (D-011), so it cannot quietly alter the record.
 
@@ -293,6 +371,15 @@ migration and a real end-to-end browser test are both deferred rather than
 attempted hours before submission.
 
 ## 7. Security posture
+
+*One table, three honest statuses, no hedging. It is longer than a table of
+things that work would be, because roughly a third of the rows are gaps. That
+is deliberate: a control whose edges nobody knows is more dangerous than a
+weaker one everybody understands, and a reviewer who finds an undisclosed gap
+should be able to assume there are others. Everything marked "known gap" is
+something we would fix before this touched a real patient, and the summary
+below the table says plainly why it cannot yet.*
+
 
 **Implemented** = built, tested, verifiable here. **Documented decision** =
 deliberate for a 72-hour prototype, production shape stated. **Known gap** =
