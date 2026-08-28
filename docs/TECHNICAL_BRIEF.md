@@ -5,61 +5,67 @@ as-is** (§7).
 
 ## 1. What Care Note is, and how we approached it
 
-A patient's story is currently scattered across dated free-text notes, each
-written by a different person in a different screen. Nobody holds the whole
-thread. A clinician opening a chart before a consult is reconstructing months of
-history by scrolling and guessing what matters.
+A patient's history is currently spread across dated free-text notes, each
+written by a different person in a different screen, and there is no single
+place that consolidates all of it. This makes opening a chart before a consult
+difficult, because the clinician has to reconstruct months of history by
+scrolling through notes and working out for themselves which ones matter.
 
-**Care Note replaces that with one shared, longitudinal record per patient.**
-Clinician notes, nurse and staff notes, the patient's own contributions, and
-AI-scribed summaries of every consult all land in a single timeline, each entry
-carrying who wrote it, when, and what it came from. On top sits a **Glance
-View** — a top card designed to be read in under ten seconds: what changed since
-you last looked, what could hurt this patient, what matters and why, what is
-outstanding and whose it is.
+**Care Note replaces that with one shared record per patient.** Clinician notes,
+nurse and staff notes, the patient's own contributions, and AI-scribed summaries
+of every consult all go into a single timeline, and each entry records who wrote
+it, when, and what it came from. Above the timeline is the **Glance View**, a
+card designed to be read in under ten seconds. It answers four questions: what
+changed since you last looked, what could hurt this patient, what matters and
+why, and what is outstanding and whose job it is.
 
-Four commitments shaped every decision, and they pull against each other in
-ways worth being explicit about.
+Four things had to be true for this to be worth using, and we designed around
+all four rather than picking one.
 
-**It has to be safe.** These are medical records. Access control is fused to
-both role and clinic and enforced server-side, never in the UI. Every piece of
-text that reaches a model passes one redaction chokepoint that strips names,
-identifiers and phone numbers, re-scans its own output, and refuses to send
-rather than leak. Logs carry IDs and actions, never content.
+**It has to be secure.** These are medical health records. Access control checks
+both the user's role and their clinic on every request, and it runs on the
+server, so the UI is never what protects the data. Any text sent to a model
+first passes through one redaction function that removes names, ID numbers and
+phone numbers. That function then re-checks its own output and refuses to send
+anything that still looks identifying. Logs record IDs, actions and timestamps —
+never the content of a note.
 
-**It has to be fast.** A clinician sees a great many patients in a day, and a
-tool that costs thirty seconds per chart costs hours per week. The Glance View
-is measured, not asserted: P95 server handling of ~11 ms against a 300 ms
-budget (§4).
+**It has to be fast.** Clinical staff see a lot of patients in a day, so a tool
+that adds thirty seconds per chart costs them hours a week. We measured this
+rather than assuming it: the Glance View loads with a P95 of about 11 ms against
+the 300 ms target (§4).
 
-**It has to be worth adopting.** Nobody adopts software that makes their job
-harder, and clinical staff have every reason to be sceptical. So the system
-tries to *remove* work rather than add process: confirming or dismissing a
-suggestion is one click without leaving the card, the AI writes the consult
-summary nobody wanted to type, and role-based views mean each person sees their
-own job rather than everyone's. The patient view is written in plain language
-for an anxious reader, not clinical shorthand.
+**It has to be genuinely useful, or nobody will adopt it.** Software that makes
+a clinician's job harder does not get used, whatever it does well. So the design
+removes work instead of adding steps. The AI writes the consult summary that
+somebody would otherwise have typed. Confirming or dismissing a suggestion takes
+one click and does not navigate away from the card. Each role sees the part of
+the record that concerns them rather than all of it. The patient view is written
+in plain language rather than clinical shorthand, because the person reading it
+is often anxious and is not a clinician.
 
-**And the AI has to be continuously verifiable.** This is the constraint that
-shapes the architecture, because in this domain neither direction of error is
-acceptable — a false positive trains staff to ignore the system, and a false
-negative is a missed allergy. We do not think that is solved by a better model.
-It is handled by treating **AI output as a claim, not a fact**: every claim has
-a source you can open, a confidence measured from evidence rather than
-self-reported, a human who can accept or reject it in one click, and no power to
-overwrite what a clinician wrote. Where the system cannot support a claim, it
-**abstains** — an untraceable summary line gets no citation rather than a
-plausible-looking one. That is a data-model commitment before a UI one, which is
-why it sits in the schema (§3) rather than in a component.
+**And the AI has to be verifiable, continuously.** This is the constraint that
+drove most of the architecture. Neither kind of error is acceptable here: a
+false positive teaches staff to ignore the system, and a false negative can mean
+a missed allergy. We do not think a better model fixes that on its own, so the
+system treats **AI output as a claim rather than a fact.** Every claim has a
+source the clinician can open, a confidence score measured from the transcript
+rather than reported by the model, and a human who can accept or reject it in
+one click — and it can never overwrite something a clinician wrote. When the
+system cannot back a claim up, it says so instead of guessing: a summary line it
+cannot trace to the transcript is shown with no citation at all, rather than one
+that looks checkable and is not. This is a decision about the data model before
+it is one about the interface, which is why it lives in the schema (§3).
 
 ## 2. Architecture
 
-*A React client talking to a FastAPI backend over SQLite. Two things in the
-diagram do the real work: `require_access()`, the single door every request
-enters through, and `llm_client.complete()`, the single door every outbound
-piece of text leaves through. Everything else is ordinary. Both are chokepoints
-by design — a rule enforced in one place that nothing can route around is worth
-more than the same rule written correctly in forty handlers.*
+*A React frontend, a FastAPI backend and a SQLite database. Two parts of the
+diagram matter more than the rest. `require_access()` is the only way a request
+reaches a handler, so every access-control check happens there. Only
+`llm_client.complete()` can send text to a model, so every redaction check
+happens there. Both are deliberately single points: one rule that nothing
+can bypass is safer than the same rule repeated correctly across forty
+handlers.*
 
 
 ```
@@ -106,14 +112,15 @@ or removes the redaction call.
 
 ## 3. Schema
 
-*`Entry` — one item on the patient's timeline — is the hub, and every
-relationship the requirements name hangs directly off it. Versions give
-revision history, Comments give collaboration, Highlights give the Glance View
-its content, and `AIScribedNote` is what marks an entry as machine-authored.
-Provenance is the one deliberate exception to normal database design: it is a
-string URI rather than a foreign key, because the things a citation points at
-are not all rows in one table. The learning mechanism reads from the same
-graph and is constrained by it, described at the end of this section.*
+*`Entry` is one item on the patient's timeline, and it is the centre of the
+schema — every other table connects to it. Versions hold the revision history,
+Comments hold the collaboration, Highlights are what the Glance View displays,
+and an `AIScribedNote` row is what marks an entry as written by the AI rather
+than a person. Provenance works differently from the rest on purpose: it is a
+string URI instead of a foreign key, because a citation can point at a whole
+entry, a range of characters inside one, or a segment of audio, and those are
+not all rows in the same table. How the learning mechanism fits in is covered at
+the end of this section.*
 
 
 | Link | Mechanism |
@@ -160,13 +167,14 @@ anaphylaxis and self-harm tags are floored at zero.
 
 ## 4. Glance View and latency
 
-*The Glance View is the product's core claim: that a clinician can be oriented
-in under ten seconds. Two things make that possible, and both are subtractive.
-The card **refuses to show most of what it knows** — a top card containing
-everything is just the timeline again — and expensive work happens on write
-rather than on read, so opening a chart is mostly a database read of
-precomputed rows. The latency figure below is evidence for that design choice
-rather than a boast about speed.*
+*The Glance View is the main thing we are claiming: that a clinician can get
+oriented on a patient in under ten seconds. Two decisions make that work, and
+both involve doing less. The card deliberately shows only a few items rather
+than everything it could — a card showing everything would just be the timeline
+again — and the expensive scoring happens when an entry is written, not when the
+card is opened, so loading a chart is mostly reading rows that already exist.
+The timing below is evidence for that second decision rather than a claim about
+raw speed.*
 
 
 The Top Card answers four questions in fixed order: what changed since you were
@@ -199,14 +207,15 @@ unlikely, but the test that settles it is a loaded staging environment.
 
 ## 5. Trust calibration, evaluation and abstention
 
-*This is the section that answers "why should a clinician believe any of this?"
-Five mechanisms, each closing a different way an AI-assisted record can lose a
-user's trust: unearned authority, invisible uncertainty, silently overwritten
-human work, contradictions nobody surfaces, and generated text reaching a
-patient. The table that follows asks the harder question of the three numbers
-we put on screen — a risk badge, a confidence label and an importance score —
-which is not what they are but how anyone would know if they were wrong, and
-what the system does when it cannot answer.*
+*This section answers the question a clinician would actually ask: why should I
+believe any of this? Below are five mechanisms, each addressing a different way
+an AI-assisted record loses people's trust — the AI presenting a guess as
+settled, uncertainty that is not visible, human work being quietly overwritten,
+two notes contradicting each other with nobody noticing, and generated text
+being shown to a patient. The table after them takes the three numbers we put on
+screen — a risk badge, a confidence label and an importance score — and asks not
+what they are but how anyone would know if one of them were wrong, and what the
+system does when it cannot answer.*
 
 
 **1. Accept / reject.** `Highlight.status` starts `suggested` and needs a
@@ -289,12 +298,12 @@ it does not close it.
 
 ## 6. Trade-offs, assumptions, deferred scope
 
-*Every decision below is one where a defensible alternative existed. They are
-recorded with reasoning rather than as a feature list, because in 72 hours the
-interesting information is what was traded away and why. `DECISIONS.md` holds
-the full log — around seventy entries, including scope deliberately cut and
-decisions later reversed. The section ends with the defects we found after
-calling the build finished, which is the part most worth reading.*
+*Each decision below had a reasonable alternative we did not take, so we have
+given the reasoning rather than just listing what was built. In a 72-hour
+project what was left out, and why, says more than the feature list does.
+`DECISIONS.md` in the repo has the full log — around seventy entries, including
+scope we deliberately cut and a few decisions we later reversed. The section
+ends with the defects we found after we thought the build was finished.*
 
 
 **Regex redaction over NER (D-012).** Data is synthetic, so recall against real
@@ -372,13 +381,13 @@ attempted hours before submission.
 
 ## 7. Security posture
 
-*One table, three honest statuses, no hedging. It is longer than a table of
-things that work would be, because roughly a third of the rows are gaps. That
-is deliberate: a control whose edges nobody knows is more dangerous than a
-weaker one everybody understands, and a reviewer who finds an undisclosed gap
-should be able to assume there are others. Everything marked "known gap" is
-something we would fix before this touched a real patient, and the summary
-below the table says plainly why it cannot yet.*
+*One table, three statuses, nothing hedged. It is longer than a list of things
+that work would be, because about a third of the rows are gaps rather than
+features. We would rather a reviewer see the gaps here than find one we had not
+mentioned, since an undisclosed gap suggests there are others. Everything marked
+"known gap" is something that would need fixing before this went near a real
+patient, and the paragraph below the table says plainly why it is not ready
+for one.*
 
 
 **Implemented** = built, tested, verifiable here. **Documented decision** =
