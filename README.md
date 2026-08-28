@@ -9,12 +9,20 @@ and server-enforced RBAC.
 > **Synthetic data only.** This is a prototype. It has never been connected to a
 > real medical record and must not be.
 
-**Build status: complete (Phases 0–6).** Longitudinal timeline, AI scribe
+**Build status: complete (Phases 0–8).** Longitudinal timeline, AI scribe
 pipeline, Glance View with provenance click-through, threaded collaboration,
-revision history with revert, conflict handling, adaptive importance, data
-decay, and ambient voice capture. See [Current status](#current-status) for the
-honest list of what is and is not finished — including the parts that are
-stubbed.
+revision history with revert, conflict handling, contradiction detection,
+adaptive importance, data decay, and ambient voice capture. See
+[Current status](#current-status) for the full list of what is and is not
+finished, including the parts that are stubbed.
+
+**If you have twenty minutes**, run the Quick start below, log in as
+`clinician_a`, and follow the [end-to-end walkthrough](#end-to-end-walkthrough).
+That covers the Glance View, provenance click-through, revision history and the
+role scoping. If you are reviewing rather than running it, the three sections
+worth reading are [Where redaction happens](#where-redaction-happens),
+[How RBAC is enforced](#how-rbac-is-enforced), and
+[Known gaps](#known-gaps-stated-plainly).
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
@@ -113,6 +121,10 @@ if any check fails.
 
 ## Running tests
 
+Everything runs offline. There is no API key to obtain, no service to start, and
+no network access needed — the LLM provider defaults to an offline stub and the
+database is a local SQLite file created by the test run.
+
 ```bash
 pytest tests/ -v                  # from the repository root — 435 tests
 ```
@@ -145,8 +157,8 @@ pytest tests/test_evaluation_and_abstention.py -v     # what each number means, 
 
 `test_phase7_reported_bugs.py` is worth running on its own if you are reviewing
 the fixes described in `DECISIONS.md` D-059 through D-062. Ten of its fifteen
-tests fail against the Phase 6 code, which is the point of them: they pin
-defects rather than describe current behaviour.
+tests fail against the Phase 6 code. That is deliberate — a regression test that
+has never failed only describes what the code does today.
 
 ### Frontend component tests
 
@@ -242,6 +254,12 @@ both detection paths return the same 409, and pinned by
 ---
 
 ## How the AI scribe works
+
+The scribe turns a consult transcript into a timeline entry. The steps below
+matter mostly for two reasons: redaction happens before the text goes anywhere
+near a model and again inside the client that sends it, and the entry that comes
+out is marked as machine-authored in the data itself rather than by a label the
+interface could get wrong.
 
 ```
 POST /patients/{id}/scribe {"interaction_type": "doctor_patient_consult"}
@@ -365,6 +383,12 @@ curl -i localhost:8000/demo/patients/patient-b1 -H "Authorization: Bearer $TOKEN
 
 ## Layout
 
+Three directories matter more than the others if you are looking for the parts
+that carry the safety properties: `security/` holds the access rules and their
+enforcement, `ai/` holds redaction and the only code that talks to a model, and
+`services/` holds the domain logic — scoring, the scribe, contradictions,
+learning and decay.
+
 ```
 backend/
   app/
@@ -405,6 +429,11 @@ ATTRIBUTION.txt  dependencies and licenses
 ---
 
 ## Current status
+
+The three subsections below are meant to be read together and in order: what
+works, what is partial or was deliberately left out, and what is missing
+outright. The third is the longest, which is intentional — a reviewer who finds
+an undisclosed gap has reason to wonder what else was not mentioned.
 
 ### Built and working
 
@@ -463,7 +492,7 @@ on write. Re-measured on the final build across three runs: P95 **14.3 / 13.3 /
 recorded after Phase 4; the chart is two entries deeper and the container was
 under different load. At roughly 5% of budget neither the spread nor the drift
 changes any conclusion, and the range is reported rather than the best run —
-quietly keeping the older, prettier number is exactly the sort of thing this
+quietly keeping whichever number looks best is the sort of thing this
 README exists not to do.
 
 ### Known gaps, stated plainly
@@ -589,7 +618,10 @@ layout survives a narrow viewport, nothing stronger.
 
 ## Adaptive importance and data decay
 
-Two bonus tracks from the brief, both built rather than described.
+Two bonus features, both built rather than only described. The first makes the
+Glance View's ranking adapt to what a clinic pays attention to; the second stops
+old entries from crowding a chart forever. The interesting part of both is what
+they are *not* allowed to do, covered below.
 
 ### What the ranking learns, and from what
 
@@ -841,6 +873,10 @@ receipt it returns.
 ---
 
 ## Security posture at a glance
+
+The same table as in `ARCHITECTURE.md`, repeated here so it is not missed by
+someone who only opens one file. Roughly a third of the rows are gaps rather
+than features, and that is the honest ratio for a 72-hour prototype.
 
 > **This build is not safe for real PHI as-is.** It is a prototype on synthetic
 > data. The gaps below are disclosed deliberately, not discovered later.

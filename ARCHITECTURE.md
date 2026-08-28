@@ -1,14 +1,25 @@
 # Architecture
 
-**Status:** Complete (Phases 0–6). Product surface, both bonus tracks
-(self-learning importance, data decay) and ambient voice capture are built;
-351 tests pass. Sections below are appended per phase, so the earliest ones
-describe foundations that later sections extend rather than replace — the
-security posture summary and the Phase 4/5/6 sections carry the current state.
+**Status:** Complete (Phases 0–8). The product surface, both bonus tracks
+(self-learning importance, data decay), ambient voice capture, and the
+evaluation work from Phase 8 are all built. 435 backend tests and 25 frontend
+tests pass.
+
+**How to read this document.** Sections were appended as each phase was built,
+so it reads roughly in the order the system was made. The early sections
+describe foundations that later ones extend rather than replace, which means a
+detail from Phase 0 may have been revised further down. If you only want the
+current state, read the Stack and Component diagram sections for the shape of
+the system, then the Security posture summary, then Phases 4, 5 and 8.
 
 ---
 
 ## Stack
+
+Every choice here optimises for how much working software can be built in 72
+hours, not for how it would be run in production. Where those two point in
+different directions the table says so, and the Security posture section lists
+what would have to change.
 
 | Layer | Choice | Reasoning |
 |---|---|---|
@@ -29,6 +40,13 @@ a Python service doubles the surface where a scoping check can go missing).
 ---
 
 ## Component diagram
+
+Two boxes in this diagram carry the safety properties, and the rest is a
+conventional web application. `require_access()` is the only way a request
+reaches a route handler, so every role and clinic check happens in one place.
+`llm_client.complete()` is the only code that can send text out to a model, so
+redaction happens in one place too. Both are deliberately narrow: a rule
+enforced at a single point cannot be forgotten in a handler somebody adds later.
 
 ```
                          ┌──────────────────────────────────┐
@@ -151,7 +169,7 @@ loudly. So the two are fused structurally:
 
 Forgetting the clinic check is therefore not a mistake that can be made, because
 there is no API that permits it. That property is what the design is buying;
-it is worth more than the small amount of ceremony it costs.
+it is worth the small amount of ceremony it costs.
 
 Cross-clinic fetches by exact id return **404, not 403** — a 403 would confirm
 the id exists somewhere, which is itself a leak.
@@ -181,6 +199,11 @@ authorship, so an admin account cannot quietly alter the record.
 ---
 
 ## API surface
+
+The **Roles** column is the enforcement, not documentation of it — each entry
+corresponds to a `require_access()` dependency on that route, checked on the
+server. A role absent from the column gets a 403, or a 404 where confirming that
+the record exists would itself leak something.
 
 | Route | Roles | Notes |
 |---|---|---|
@@ -311,7 +334,9 @@ patient names after exercising every route (clean).
 
 ## Latency
 
-Target: Glance View P95 ≤ 300 ms on a warm path.
+Target: Glance View P95 ≤ 300 ms on a warm path. What follows is the number, then
+how it was produced, then what it does and does not prove — in that order,
+because a latency figure without its method is not worth much.
 
 ### Measured
 
@@ -335,8 +360,8 @@ lowest of the three despite the chart being deepest, which is container load
 rather than anything anyone optimised — reading a 3 ms move at roughly 4% of the
 budget as an improvement would be reading noise as a result. The Phase 6 numbers
 are left visible above for the same reason they were reported then: quietly
-keeping whichever number is prettiest is the kind of thing this document exists
-to not do.
+keeping whichever number looks best would undermine the point of recording
+them at all.
 
 ### Method, and what the number excludes
 
@@ -384,7 +409,9 @@ script. Recorded as a known gap rather than smoothed over.
 
 ## Security posture
 
-Three statuses are used throughout, and they mean different things:
+This is the section to read if you want to know whether this build could be
+trusted with real data. The short answer is no, and the table says why. Three
+statuses are used throughout, and they mean different things:
 
 - **Implemented** — built, tested, and verifiable in this repo.
 - **Documented decision** — a deliberate choice for a 72-hour prototype, with
@@ -564,9 +591,9 @@ been connected to a real medical record.
 
 ## Trust calibration — the design thesis
 
-The brief's central question: *we trust LLMs but only up to a point, then we
-need reassurance from clinicians and staff.* Three structural answers, all
-already visible in the Phase 0 schema rather than added later as UI polish:
+Clinical staff will trust an AI-assisted record up to a point, and then they
+need a reason to believe it. Three answers to that, all built into the Phase 0
+schema rather than added later as interface polish:
 
 1. **AI output is a suggestion until a human accepts it.** `Highlight.status`
    starts at `suggested` and requires a clinician decision. No AI-generated
@@ -582,15 +609,19 @@ already visible in the Phase 0 schema rather than added later as UI polish:
 
 Plus a fourth, quieter one: `AIScribedNote.confidence` is persisted, so the
 interface can show *how sure the model was* rather than presenting every summary
-with identical visual authority. Uniform confidence in a UI is itself a claim,
+with identical visual authority. Presenting everything with the same certainty
+is itself a claim about the content,
 and usually a false one.
 
 ---
 
 ## Phase 4 components
 
-Two subsystems, no new infrastructure, no new dependencies. Both sit behind the
-same `AccessScope` dependency as everything else.
+Two bonus features from the requirements: making the Glance View's ranking adapt
+to what a clinic actually pays attention to, and compressing old entries that no
+longer earn their place in a chart. Neither needed new infrastructure or new
+dependencies, and both sit behind the same `AccessScope` dependency as
+everything else.
 
 ### The learning loop, closed
 
@@ -712,6 +743,14 @@ scales with clinic size, and neither is called during a consult.
 ---
 
 ## Phase 5 components — ambient consult capture
+
+Voice capture lets a clinician or a patient record a consult and have it become
+an AI-scribed entry, rather than typing one. It is a bonus feature and the least
+finished part of the build: recording and the pipeline behind it are real, but
+the speech recogniser is a simulated stub, so **no audio has ever actually been
+transcribed by this system.** That is stated on every surface the feature
+touches, and the first subsection below explains why we did not simply connect a
+real one.
 
 ### The one place the redaction rule cannot apply
 
