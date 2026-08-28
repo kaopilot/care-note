@@ -36,7 +36,7 @@ rather than assuming it: the Glance View loads with a P95 of about 11 ms against
 the 300 ms target (§4).
 
 **It has to be genuinely useful, or nobody will adopt it.** Software that makes
-a clinician's job harder does not get used, whatever it does well. So the design
+a clinician's job harder does not get used, regardless if it works. So the design
 removes work instead of adding steps. The AI writes the consult summary that
 somebody would otherwise have typed. Confirming or dismissing a suggestion takes
 one click and does not navigate away from the card. Each role sees the part of

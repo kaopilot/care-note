@@ -1,9 +1,8 @@
 # Architecture
 
-**Status:** Complete (Phases 0–8). The product surface, both bonus tracks
+**Status:** Working prototype where the product surface, both bonus tracks
 (self-learning importance, data decay), ambient voice capture, and the
-evaluation work from Phase 8 are all built. 435 backend tests and 25 frontend
-tests pass.
+evaluation work are all built. 435 backend tests and 25 frontend tests pass.
 
 **How to read this document.** Sections were appended as each phase was built,
 so it reads roughly in the order the system was made. The early sections
