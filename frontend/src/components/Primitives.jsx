@@ -221,8 +221,10 @@ export function SpanText({ content, emphasis, mono = false, className = '' }) {
 
   const start = Math.max(0, emphasis.start)
   const end = Math.min(text.length, emphasis.end)
+  // `data-start` on the <p> as well as on each child, so that a selection
+  // resolving to the paragraph itself still has an anchor to measure from.
   return (
-    <p className={base}>
+    <p className={base} data-start="0">
       <span data-start="0">{text.slice(0, start)}</span>
       <mark className="span-emphasis" data-start={String(start)}>
         {text.slice(start, end)}
@@ -240,13 +242,41 @@ export function readSelectionRange(container) {
   const selection = window.getSelection()
   if (!selection || selection.isCollapsed || !container) return null
 
-  const offsetOf = (node, offset) => {
+  /** Character offset at which the segment containing `node` begins. */
+  const segmentStart = (node) => {
     let element = node.nodeType === 3 ? node.parentElement : node
     while (element && element !== container && !element.dataset?.start) {
       element = element.parentElement
     }
     if (!element || !container.contains(element)) return null
-    return Number(element.dataset?.start || 0) + offset
+    return Number(element.dataset?.start || 0)
+  }
+
+  const offsetOf = (node, offset) => {
+    if (!node) return null
+
+    // A TEXT node's offset is a character offset within that node, so the
+    // enclosing segment's start plus the offset is the answer.
+    if (node.nodeType === 3) {
+      const base = segmentStart(node)
+      return base === null ? null : base + offset
+    }
+
+    // An ELEMENT node's offset is a CHILD INDEX, not a character offset — a
+    // triple-click, or a drag ending past the last character, reports the
+    // paragraph itself with offset 0..childCount. Reading that as a character
+    // offset put the highlight a few characters into the entry instead of on
+    // the selected words. Resolve it to the boundary before that child, or to
+    // the end of the last child when the index is one past the end.
+    if (!container.contains(node)) return null
+    const children = node.childNodes
+    const boundary = children[offset]
+    if (boundary) return segmentStart(boundary)
+
+    const last = children[children.length - 1]
+    if (!last) return segmentStart(node)
+    const base = segmentStart(last)
+    return base === null ? null : base + (last.textContent || '').length
   }
 
   const anchor = offsetOf(selection.anchorNode, selection.anchorOffset)
