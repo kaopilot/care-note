@@ -38,6 +38,13 @@ MAX_SUGGESTIONS_PER_ENTRY = 3
 # Below this, a candidate is not worth a clinician's attention at all.
 MIN_SUGGESTION_SCORE = 0.12
 
+# A clinician's own mark outranks anything the machine proposed. Held here
+# rather than inline in `create_manual_highlight` because RESCORING has to
+# re-apply it: the bonus is a property of who made the highlight, not a
+# one-off adjustment at creation time. Applying it in only one of the two
+# places is what made hand-marked spans silently fall off the Glance View.
+MANUAL_HIGHLIGHT_BONUS = 0.5
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -120,20 +127,45 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
     candidates.sort(key=lambda pair: pair[0], reverse=True)
     keep = candidates[:MAX_SUGGESTIONS_PER_ENTRY]
 
-    # Undecided suggestions from a previous pass are replaced wholesale. They
-    # are machine output with no human investment in them, so churning them is
-    # free; accepted and rejected rows are never touched here.
-    for row in existing:
-        # `==`, not `is`. `Highlight.status` is declared Mapped[HighlightStatus]
-        # but stored in a String column, so a row loaded from the database comes
-        # back as a plain `str` and an identity check silently never matches.
-        # See DECISIONS.md D-055.
-        if row.status == HighlightStatus.SUGGESTED:
-            db.delete(row)
-    db.flush()
+    # Suggestions are UPDATED IN PLACE where the same span comes back, not
+    # deleted and re-created. A highlight's id is what the Glance View hands to
+    # accept/reject, and this function runs on every write to the chart — entry
+    # edits, task changes, comment resolution, another accept. Minting new ids
+    # each pass meant the card a clinician was looking at held ids that no
+    # longer existed, so Confirm returned "Highlight not found" for every
+    # suggestion after the first. Keyed on (span_start, span_end): the same
+    # words are the same claim. See DECISIONS.md D-059.
+    #
+    # `==`, not `is`. `Highlight.status` is declared Mapped[HighlightStatus] but
+    # stored in a String column, so a row loaded from the database comes back as
+    # a plain `str` and an identity check silently never matches. See D-055.
+    suggested_by_span = {
+        (row.span_start, row.span_end): row
+        for row in existing
+        if row.status == HighlightStatus.SUGGESTED
+    }
+    kept_spans: set[tuple[int, int]] = set()
 
     created: list[Highlight] = []
     for score, spec in keep:
+        span = (spec["span_start"], spec["span_end"])
+        kept_spans.add(span)
+        pointer = entry_pointer(entry.id, spec["span_start"], spec["span_end"])
+
+        row = suggested_by_span.get(span)
+        if row is not None:
+            # Same span, refreshed content. The id — and therefore any accept
+            # or reject already in flight against it — survives.
+            row.span_text = spec["span_text"]
+            row.source_version_number = entry.version_number
+            row.risk_reason = spec["risk_reason"]
+            row.provenance_pointer = pointer
+            row.score = score
+            row.score_breakdown = scoring.encode_breakdown(spec["breakdown"])
+            row.feature_tags = json.dumps(spec["tags"])
+            created.append(row)
+            continue
+
         highlight = Highlight(
             entry_id=entry.id,
             clinic_id=entry.clinic_id,
@@ -146,7 +178,7 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
             # Points at the exact character span, so clicking it lands on the
             # words rather than on the entry — the brief's "source of truth"
             # requirement, made literal.
-            provenance_pointer=entry_pointer(entry.id, spec["span_start"], spec["span_end"]),
+            provenance_pointer=pointer,
             status=HighlightStatus.SUGGESTED,
             score=score,
             score_breakdown=scoring.encode_breakdown(spec["breakdown"]),
@@ -156,6 +188,13 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
         )
         db.add(highlight)
         created.append(highlight)
+
+    # Suggestions this pass no longer produces are dropped. They are machine
+    # output with no human investment in them, so removing them is free;
+    # accepted and rejected rows are never touched here.
+    for span, row in suggested_by_span.items():
+        if span not in kept_spans:
+            db.delete(row)
 
     # Human-decided highlights still need rescoring: recency moves, tasks close,
     # and (from Phase 4) learned weights shift underneath them.
@@ -172,6 +211,14 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
             open_task_count=open_tasks,
             decay_state=entry.decay_state,
         )
+        # Re-apply the bonus a hand-marked span was created with. Without this
+        # the very next refresh — which the manual-highlight route itself
+        # triggers — recomputed the score from `score_span` alone and erased
+        # it, dropping the clinician's own mark below the machine's suggestions
+        # and, once six highlights were accepted, off the card entirely.
+        if row.created_by_role != Role.SYSTEM:  # `!=`, not `is not` — D-055
+            score = round(score + MANUAL_HIGHLIGHT_BONUS, 4)
+            breakdown["manual"] = MANUAL_HIGHLIGHT_BONUS
         row.score = score
         row.score_breakdown = scoring.encode_breakdown(breakdown)
 
@@ -254,9 +301,11 @@ def create_manual_highlight(
         open_task_count=_open_task_count(db, entry.id),
         decay_state=entry.decay_state,
     )
-    # A clinician's own highlight outranks anything the machine proposed.
-    score += 0.5
-    breakdown["manual"] = 0.5
+    # A clinician's own highlight outranks anything the machine proposed. The
+    # same bonus is re-applied by `refresh_entry_highlights` on every later
+    # rescore — see MANUAL_HIGHLIGHT_BONUS.
+    score += MANUAL_HIGHLIGHT_BONUS
+    breakdown["manual"] = MANUAL_HIGHLIGHT_BONUS
 
     highlight = Highlight(
         entry_id=entry.id,
