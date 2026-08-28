@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from app.core.audit_logging import log_event
 from app.core.enums import CommentStatus, InteractionAction, Role, TaskStatus
 from app.core.sanitization import ContentTooLongError, prepare_content
+from app.core.timeutil import UtcDateTime
 from app.models import AuditLog, Comment, Entry, Patient, Task, User
 from app.security import policy
 from app.security.rbac import AccessScope, require_access
@@ -77,8 +78,8 @@ class CommentOut(BaseModel):
     is_internal: bool
     resolved_by: str | None
     resolved_by_name: str | None
-    resolved_at: datetime | None
-    created_at: datetime
+    resolved_at: UtcDateTime | None
+    created_at: UtcDateTime
     replies: list["CommentOut"] = Field(default_factory=list)
 
 
@@ -87,7 +88,7 @@ class TaskCreate(BaseModel):
     assigned_to: str | None = None
     entry_id: str | None = None
     comment_id: str | None = None
-    due_at: datetime | None = None
+    due_at: UtcDateTime | None = None
 
 
 class TaskStatusUpdate(BaseModel):
@@ -106,9 +107,9 @@ class TaskOut(BaseModel):
     assigned_by: str
     assigned_by_name: str | None
     status: str
-    due_at: datetime | None
-    created_at: datetime
-    closed_at: datetime | None
+    due_at: UtcDateTime | None
+    created_at: UtcDateTime
+    closed_at: UtcDateTime | None
 
 
 class MentionableUser(BaseModel):

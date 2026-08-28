@@ -57,6 +57,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.enums import InteractionAction, Role
+from app.core.timeutil import iso_utc
 from app.models import FeatureWeight, InteractionLog
 
 # --------------------------------------------------------------------------
@@ -371,7 +372,7 @@ def top_weights(
                 "promotes" if row.weight > 0 else "dampens" if row.weight < 0 else "neutral"
             ),
             "floored": row.feature_tag in NEVER_DAMPENED,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "updated_at": iso_utc(row.updated_at),
         }
         for row in rows[:limit]
     ]

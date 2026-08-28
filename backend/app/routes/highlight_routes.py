@@ -40,6 +40,7 @@ from app.core.enums import (
     Role,
 )
 from app.core.provenance import ProvenanceError, resolve
+from app.core.timeutil import UtcDateTime
 from app.models import AuditLog, Entry, Highlight, Patient
 from app.security import policy
 from app.security.rbac import AccessScope, require_access
@@ -78,11 +79,11 @@ class HighlightOut(BaseModel):
     source_version_number: int
     entry_type: str
     entry_title: str | None
-    entry_timestamp: datetime
+    entry_timestamp: UtcDateTime
     is_ai_scribed: bool
     can_decide: bool
     decided_by: str | None
-    decided_at: datetime | None
+    decided_at: UtcDateTime | None
 
 
 class ManualHighlightCreate(BaseModel):

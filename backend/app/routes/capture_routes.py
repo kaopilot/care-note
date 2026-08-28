@@ -36,6 +36,7 @@ from app.core.audit_logging import log_event
 from app.core.enums import AI_SCRIBED_TYPES, CaptureKind, CaptureSource, EntryType, Role
 from app.core.provenance import ProvenanceError, resolve
 from app.core.sanitization import ContentTooLongError
+from app.core.timeutil import iso_utc
 from app.models import CaptureSession, Entry, Patient, SummaryAttribution, TranscriptSegment
 from app.routes.schemas import EntryOut, entry_out
 from app.security.rbac import AccessScope, require_access
@@ -155,7 +156,7 @@ def _capture_out(row: CaptureSession) -> CaptureOut:
         redaction_count=row.redaction_count,
         device_label=row.device_label,
         created_by_role=str(row.created_by_role),
-        created_at=row.created_at.isoformat(),
+        created_at=iso_utc(row.created_at),
     )
 
 

@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from app.core.audit_logging import log_event
 from app.core.enums import DecayState, Role
+from app.core.timeutil import iso_utc
 from app.models import AuditLog, Entry, EntryArchive
 from app.routes.schemas import EntryOut, entry_out
 from app.security.rbac import AccessScope, require_access
@@ -268,5 +269,5 @@ def get_archive_metadata(
         "original_length": row.original_length,
         "stored_length": len(row.archived_content),
         "current_length": len(entry.content or ""),
-        "archived_at": row.archived_at.isoformat() if row.archived_at else None,
+        "archived_at": iso_utc(row.archived_at),
     }

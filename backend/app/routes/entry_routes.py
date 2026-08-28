@@ -40,6 +40,7 @@ from app.core.enums import (
     Role,
 )
 from app.core.provenance import entry_pointer
+from app.core.timeutil import UtcDateTime
 from app.core.sanitization import ContentTooLongError, prepare_content
 from app.models import AuditLog, Entry, Patient, User, Version
 from app.routes.schemas import EntryOut, entry_out
@@ -93,7 +94,7 @@ class VersionOut(BaseModel):
     edited_by: str
     edited_by_name: str | None
     edited_by_role: str
-    edited_at: datetime
+    edited_at: UtcDateTime
     change_summary: str | None
     reverted_from_version: int | None
 

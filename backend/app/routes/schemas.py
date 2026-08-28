@@ -14,6 +14,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.core.enums import AI_SCRIBED_TYPES, EntryType
+from app.core.timeutil import UtcDateTime
 from app.models import Entry
 
 
@@ -31,7 +32,7 @@ class EntryOut(BaseModel):
     author_role: str
     author_id: str
     author_name: str | None = None
-    timestamp: datetime
+    timestamp: UtcDateTime
     type: str
     title: str | None
     content: str
@@ -41,7 +42,7 @@ class EntryOut(BaseModel):
     is_ai_scribed: bool
 
     # Phase 2 additions. All derived from columns Phase 0 already modelled.
-    updated_at: datetime | None = None
+    updated_at: UtcDateTime | None = None
     conflict_flagged: bool = False
     supersedes_entry_id: str | None = None
     decay_state: str = "hot"
