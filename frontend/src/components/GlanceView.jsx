@@ -20,7 +20,7 @@
  * from these decisions, and a high-friction control produces a sparse signal.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Api } from '../lib/api'
 import LearningPanel from './LearningPanel'
 import { entryLabel, relativeAge, shortDateTime } from '../lib/format'
@@ -38,6 +38,36 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
   const [decided, setDecided] = useState({})
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState(null)
+
+  // Optimistic decisions are keyed by highlight id, and the reload that follows
+  // a decision brings back the real status. Holding the local map across that
+  // reload left a "Confirmed" pill attached to an id the server had already
+  // answered for — and, when suggestions were regenerated, to nothing at all.
+  // Clearing on each new payload makes the server the single source of truth.
+  useEffect(() => {
+    setDecided({})
+  }, [glance.generated_at])
+
+  /**
+   * Close or cancel a task without leaving the card.
+   *
+   * The endpoint existed from Phase 2.5 and nothing called it: tasks could be
+   * created from a comment thread but never finished, so "Open actions" only
+   * ever grew. That also quietly distorted ranking — `action_score` reads the
+   * open-task count, so an action nobody could close kept its entry pinned.
+   */
+  async function setTaskStatus(task, next) {
+    setBusy(task.id)
+    setError(null)
+    try {
+      await Api.setTaskStatus(task.id, next)
+      onChanged?.()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function decide(highlight, accepted) {
     setBusy(highlight.id)
@@ -137,6 +167,14 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                     </button>
                   </li>
                 ))}
+                {/* The server caps this list. Saying "8 of 12" is the honest
+                    version of a count that does not match the rows under it. */}
+                {whatsNew.count > whatsNew.entries.length && (
+                  <li className="px-2 text-[11px] text-slate-500">
+                    and {whatsNew.count - whatsNew.entries.length} more in the timeline
+                    below
+                  </li>
+                )}
               </ul>
             ) : (
               <p className="mt-1 text-xs text-slate-500">
@@ -352,6 +390,29 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                     >
                       {action.description}
                     </button>
+                    {/* Closing an action is the other half of raising one.
+                        Inline and single-click, for the same reason
+                        accept/reject is: an outstanding item nobody can tick
+                        off stops meaning anything. */}
+                    {action.kind === 'task' && (
+                      <div className="mt-1 flex gap-1">
+                        <Button
+                          variant="accept"
+                          disabled={busy === action.id}
+                          onClick={() => setTaskStatus(action, 'done')}
+                        >
+                          Mark done
+                        </Button>
+                        <Button
+                          variant="reject"
+                          disabled={busy === action.id}
+                          onClick={() => setTaskStatus(action, 'cancelled')}
+                          title="Cancel this task. It stays in the audit log."
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
