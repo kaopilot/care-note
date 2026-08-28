@@ -935,3 +935,129 @@ were designed for, and every one of these walked past all of them. Two methods
 they did not walk past were *looking at the product* and *someone else using
 it*. Neither is a formality once the tests are green; on this build they were
 the only things that worked.
+
+---
+
+## Phase 8 components — evaluation and abstention
+
+Three numbers appear on the Glance View: a risk badge, a confidence label and an
+importance score. Each is now answerable on four questions — what it is, how you
+would know it was wrong, what happens when it is, and when it declines to answer
+at all. What follows is the implementation side; the reasoning is in
+`DECISIONS.md` D-065 to D-069 and the summary table is in the technical brief.
+
+### The risk badge — rules floor it, models may only raise it
+
+```
+transcript ──► _infer_risk()  ──────────────► deterministic floor
+           └─► LLM ──► summary["risk_level"] ─► model proposal
+                                                      │
+                            stored = max(floor, proposal)
+                            AIScribedNote.model_proposed_risk  = proposal
+                            AIScribedNote.risk_floor_applied   = floor > proposal
+```
+
+`_infer_risk()` runs on **both** paths — previously it ran only when no live
+model was available, which meant the guarantee held on the path nobody would
+deploy. It matches an explicit high-risk term list (`chest pain`, `bleeding`,
+`melaena`, `syncope`, `suicidal`, `self-harm`, `anaphylaxis`, `sepsis`,
+`haemoptysis`, `collapse`) and, failing that, medium-risk tag prefixes.
+
+The asymmetry is the design: a model *raising* a level may have caught something
+the keyword tables miss, so that is allowed. A model *lowering* one silently
+removes a warning, so that is not. `risk_floor_applied` drives a "Risk set by
+rule" chip in the UI, so the provenance of the badge itself is visible.
+
+**Abstention:** an unparseable or unknown `risk_level` from a model falls back to
+`low` rather than guessing, and the deterministic floor still applies on top —
+so a malformed model response cannot suppress a rule-detected red flag.
+
+### The confidence label — measured from the source, banded numerically
+
+| Band | Range | Meaning |
+|---|---|---|
+| high | ≥ 0.75 | little hedging in the source; the summary restates things the transcript said plainly |
+| medium | 0.60 – 0.75 | some hedging; worth a glance at the source |
+| low | < 0.60 | source substantially uncertain; the card flags it and says verify |
+
+`scribe.derived_confidence()` is the single definition, computed from
+`features.uncertainty_ratio()` over the redacted transcript, bounded to
+0.35–0.90. `glance.LOW_CONFIDENCE_THRESHOLD` **imports**
+`scribe.CONFIDENCE_LOW_BAND` rather than restating `0.6`; before this they were
+independent constants that happened to agree, and an interface that renders
+"medium" while its own low-confidence flag fires teaches the reader to distrust
+both numbers.
+
+`AIScribedNote.model_self_reported_confidence` stores what a live model claimed
+about itself. It is never displayed and never scored on — it exists so the two
+series can be compared later, which is the only way to find out whether a given
+model is calibrated.
+
+**Abstention:** the ceiling is 0.90, never 1.0. A summariser reading a transcript
+it did not hear, through a recogniser that may have erred, has no basis for
+certainty.
+
+### Contradiction detection
+
+`services/contradictions.py`. Pairwise over entries, sentence-level within them,
+running on write rather than on the Glance View read path. Every finding cites
+**both** entries with a quote and a resolvable pointer, and carries a
+`human_human` flag distinguishing the case where no precedence rule exists.
+
+| Class | Severity | Trigger |
+|---|---|---|
+| `allergy_vs_administration` | critical | allergy recorded for a drug, or a drug in the same class, that another entry records as given or prescribed |
+| `dose_disagreement` | high | same drug, two doses, compared on units normalised to mg |
+| `status_disagreement` | medium | one entry stops a drug, another has it running |
+
+Findings sort most-severe-first, so a truncated card drops status disagreements
+before it drops allergies. The section renders full-width above "what changed":
+a clinician who reads one line of the card should have read the most dangerous
+thing the system knows.
+
+**Nothing is resolved.** There is no precedence rule between two humans, and
+"most recent wins" would discard an allergy recorded last year in favour of a
+prescription written today.
+
+#### Recall limits, stated plainly
+
+* Detection rests on `features.MEDICATIONS`, a **watchlist, not a formulary**. A
+  drug not on it is invisible to this module.
+* Doses must match `\d+(\.\d+)? (mg|mcg|g|ml|units|iu)`. "Two tablets" is not a
+  dose to this code.
+* Negation is a 40-character lookbehind for `no|not|never|denies|avoid|without|
+  nil`, not real scope detection. "No history of the penicillin allergy her
+  sister has" is beyond it.
+* Only three classes are covered. Contradictory diagnoses, conflicting vital
+  signs and disagreeing follow-up intervals are not detected.
+
+The failure mode throughout is **silence, never a wrong answer**. That is the
+right direction for this control — but it means the absence of a flag is not
+evidence of agreement, and the README says so where a clinician would read it.
+
+### Exposure bias — one reserved slot
+
+`highlights._keep_with_exploration()`. Of `MAX_SUGGESTIONS_PER_ENTRY` slots, one
+is given to the highest-scoring candidate whose tags the clinic has never seen
+feedback on, if such a candidate exists and clears `MIN_SUGGESTION_SCORE`. It
+displaces the weakest of the top, never the strongest.
+
+Deterministic on (entry content, feedback history) — not epsilon-greedy. A card
+that differs between two loads of an unchanged chart is a worse property on a
+clinical surface than the bias it corrects.
+
+This narrows the feedback loop; it does not close it. Feedback is still only
+collected on surfaced items. Closing it properly needs off-policy evaluation
+against held-out charts, which needs data this build does not have.
+
+### Security posture — Phase 8 additions
+
+| Area | Status |
+|---|---|
+| Risk ordinal cannot be lowered by a model | **Implemented** — deterministic floor on both paths, provenance stored per note |
+| Displayed confidence is never model self-reported | **Implemented** — derived on both paths; self-report stored, never rendered |
+| Patient-facing generation | **Implemented** — structurally impossible; import-time guard on the scribe's type map |
+| Human-human clinical contradiction detection | **Implemented (narrow)** — three classes, deterministic, never auto-resolved |
+| Contradiction recall | **Known gap** — watchlist not formulary; crude negation; absence of a flag is not evidence of agreement |
+| Exposure bias in the learning loop | **Partially mitigated** — one reserved exploration slot; no off-policy evaluation |
+| Confidence calibration | **Known gap** — hedging density is a proxy for speaker certainty, not for summary support; never validated against labelled data |

@@ -137,7 +137,7 @@ queries regardless of chart size. Production means Postgres over a network,
 hundreds of entries and concurrent load; the ~20× headroom makes inversion
 unlikely, but the test that settles it is a loaded staging environment.
 
-## 5. Trust calibration — three mechanisms
+## 5. Trust calibration, evaluation and abstention
 
 **1. Accept / reject.** `Highlight.status` starts `suggested` and needs a
 clinician decision; no AI claim reaches the card as fact on its own authority.
@@ -148,12 +148,14 @@ hand-marked span is recorded `accepted` on creation and carries a scoring bonus,
 so human judgement outranks machine suggestion on the card by construction —
 which is precisely what silently broke in Phase 7 (§6).
 
-**2. Visible confidence, derived not asserted.** On the offline path confidence
-comes from hedging density in the source transcript: the patient session full of
-"maybe" lands near 0.47 and is flagged; the measurement-heavy nurse consult near
-0.77. Low-confidence summaries flag **separately from risk** — "this might be
-dangerous" and "this might be wrong" are different warnings a clinician acts on
-differently. Uniform confidence in an interface is itself a claim, usually false.
+**2. Visible confidence, derived not asserted.** Confidence is computed from
+hedging density in the source transcript on **both** paths — a live model's
+self-report is stored for calibration and is never what the clinician sees,
+because a model's opinion of its own reliability is not evidence about it. Bands
+are numeric and defined once: **high ≥0.75, medium 0.60–0.75, low <0.60**, and
+the chip shows the word and the number together. Low-confidence summaries flag
+**separately from risk** — "this might be dangerous" and "this might be wrong"
+are different warnings a clinician acts on differently.
 
 **3. Clinician precedence *and* a review flag.** The brief allows either; we do
 both. A clinician edit wins immediately — care is never blocked on a resolution
@@ -163,10 +165,57 @@ information: that the AI disagreed is *itself* clinically interesting, and
 discarding it quietly is how a system teaches users to stop trusting it. AI notes
 are never edited in place; corrections supersede.
 
-Supporting all three: `provenance_pointer` is non-nullable on `Highlight`,
+**4. Contradiction detection, including human-human.** Mechanism 3 handles a
+disagreement that has been *resolved*. The dangerous one is unresolved: a nurse
+records a penicillin allergy, a clinician prescribes amoxicillin, neither is
+wrong on purpose, and no precedence rule applies because both are people.
+`services/contradictions.py` detects three classes deterministically — allergy
+against administration (including by drug class), dose disagreement on the same
+drug, and started-here/stopped-there — cites **both** entries, and **resolves
+nothing**. Deciding that the more recent note wins would silently discard an
+allergy recorded last year. It sits above everything else on the card.
+
+**5. Patient-facing generation is structurally impossible, not approved.**
+Showing a clinician a hallucinated line is a bad day; showing a patient one is a
+different category of harm — no second reader, no provenance rail, no basis to
+doubt. Rather than generating patient text and requiring sign-off — a step
+people click through under load — no generated text can become patient-facing at
+all. `PATIENT_FACING_TYPES` is writable only by `clinician`; `Role.SYSTEM` can
+write nothing; `assert_never_patient_facing()` runs at import against the
+scribe's own type map so a future edit fails loudly; and AI types are absent
+from the patient's viewable set. A clinician may read an AI summary and write an
+instruction from it — they type the words.
+
+Supporting all five: `provenance_pointer` is non-nullable on `Highlight`,
 resolution lands on the **character span** not the note, and AI-vs-human is
 carried by four independent signals (rail style, colour, typeface, label) so it
 survives in greyscale.
+
+### What each number means, and how we would know it was wrong
+
+| | Risk badge | Confidence label | Importance score |
+|---|---|---|---|
+| **What it is** | Ordinal none→critical. Deterministic rules over transcript text set a **floor**; a model may raise it, never lower it | A number in 0.35–0.90 measured from hedging density in the source, banded high/medium/low | Weighted sum of named terms (recency, risk, entities, open actions) plus a learned term capped at 0.25 |
+| **How we'd know it was wrong** | Same input must give same level every run; a floor test asserts `chest pain` cannot resolve below `high`. Drift is visible because `model_proposed_risk` and `risk_floor_applied` are both stored | Confidence must fall as hedging rises — asserted against a plain and a hedged transcript. The band boundary and the UI's flag threshold are asserted to be the same constant | Every highlight shows its own arithmetic; a wrong ranking is inspectable term by term rather than argued about |
+| **What happens when it is** | The rule floor holds the badge up. `risk_floor_applied` tells the clinician the level came from a rule, not a model's mood | Below 0.60 the summary is flagged "verify against source" separately from risk, and the provenance rail opens the transcript | The clinician accepts or rejects in one click; rejection dampens the tag — except safety vocabulary, floored at zero so fatigue cannot silence anaphylaxis |
+| **When it abstains** | Unparseable model risk falls back to `low`, and the deterministic floor still applies on top | Never claims 1.0 — a summariser reading a transcript it did not hear has no business reporting certainty | A span with no clinical reason produces **no highlight at all**; the rule layer runs before scoring |
+
+The same discipline governs the two places abstention matters most.
+**Attribution** classifies each summary line `verbatim` / `derived` / **nothing**
+— a line the model composed or invented gets no pointer and the UI says "no
+traceable source" rather than pointing somewhere plausible, because a false
+citation that looks checkable survives review. **Redaction** re-scans its own
+output and **raises rather than sends** if anything identifying survived; it is
+also tested for the opposite failure, that `Metformin 500mg BD` and `HbA1c 8.2%`
+survive intact, since over-redaction corrupts the note it was protecting.
+
+**Exposure bias** is the one hazard we can only partly answer. Learning sees
+feedback only on spans it chose to surface, so a tag below the cut is never
+shown, never accepted, never weighted. One suggestion slot per entry is reserved
+for a candidate carrying a tag the clinic has never given feedback on —
+deterministic rather than epsilon-greedy, because a card that differs between
+loads is worse on a clinical surface than the bias it fixes. It narrows the loop;
+it does not close it.
 
 ## 6. Trade-offs, assumptions, deferred scope
 
@@ -275,6 +324,12 @@ than a weaker one everybody understands.
 | Per-user normalisation of learning signals | **Known gap** — one enthusiast counts as consensus |
 | Enum columns typed `String` not `Enum` | **Known gap** — structural fix for D-055 |
 | Formal accessibility / WCAG audit | **Known gap** — colour is never the sole signal, but no audit was run |
+| Risk ordinal floored by deterministic rules | **Implemented** — a model may raise a level, never lower one; provenance stored per note (D-066) |
+| Patient-facing generation | **Implemented** — structurally impossible, guarded at import, not gated by an approval step someone can click through (D-067) |
+| Human-human contradiction detection | **Implemented (narrow)** — allergy/dose/status, deterministic, never auto-resolved (D-068) |
+| Contradiction recall | **Known gap** — watchlist not formulary; absence of a flag is not evidence of agreement |
+| Confidence calibration | **Known gap** — hedging density is a proxy, never validated against labelled data |
+| Exposure bias in the learning loop | **Partially mitigated** — one reserved exploration slot; no off-policy evaluation (D-069) |
 | Wire-format timezone correctness | **Implemented (by convention)** — UTC offsets via one annotation, pinned by tests that walk payloads; a new endpoint can still regress it (D-061) |
 | End-to-end browser testing | **Known gap** — component tests mock `Api`, so a change to the fetch layer is caught by neither suite |
 
@@ -285,7 +340,7 @@ production shape; the honest consequence is that **this build is not safe for
 real PHI as-is**, which the README states too so it cannot be missed by someone
 who opens one file.
 
-**Verification.** 400 backend tests plus 25 frontend component tests, no API key
+**Verification.** 435 backend tests plus 25 frontend component tests, no API key
 or network needed. Access-control and history tests were **deliberately broken to
 confirm they can fail** — reversing D-004 fails exactly the staff-visibility
 tests, removing the clinic filter fails 15, disabling the conflict guard fails 3.

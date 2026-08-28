@@ -159,6 +159,22 @@ about it."*
   would fix next; a candidate who can name the shape of their own blind spot is
   worth more than one with nothing to report.
 
+- **The three numbers, if they ask about evaluation:** the risk badge has a
+  deterministic floor a model can raise but never lower, and the row records
+  which one set it. Confidence is measured from hedging in the source on every
+  path, banded high ≥0.75 / medium 0.60–0.75 / low <0.60 — a live model's
+  self-report is stored for calibration and never shown, because a number the
+  model chose about itself cannot be checked by the person reading it. The
+  importance score shows its own arithmetic term by term. Each abstains: an
+  unparseable risk falls back to `low` with the floor still applied, confidence
+  never claims 1.0, and a span with no clinical reason produces no highlight at
+  all.
+- **Contradictions, worth demoing if there is time:** add a note recording a
+  penicillin allergy and another prescribing amoxicillin. A critical band
+  appears above everything else on the card, quotes both entries, and resolves
+  nothing — because both were written by people and there is no precedence rule
+  to apply. Say that last part out loud; the restraint is the point.
+
 ## Do not
 
 - Read the security table aloud. Point at the brief and move on.

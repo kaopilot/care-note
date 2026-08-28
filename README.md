@@ -17,9 +17,9 @@ honest list of what is and is not finished — including the parts that are
 stubbed.
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
-(2 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
+(3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (400 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (435 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -114,10 +114,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 400 tests
+pytest tests/ -v                  # from the repository root — 435 tests
 ```
 
-400 tests, all passing, no API key or network required. Roughly 34 seconds.
+435 tests, all passing, no API key or network required. Roughly 29 seconds.
 
 To run just the four files the brief names:
 
@@ -140,6 +140,7 @@ pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 pytest tests/test_self_learning_importance.py tests/test_data_decay.py -v  # Phase 4 bonuses
 pytest tests/test_voice_capture.py -v -k provenance   # segment-level provenance only
 pytest tests/test_phase7_reported_bugs.py -v         # regressions for the Phase 7 defects
+pytest tests/test_evaluation_and_abstention.py -v     # what each number means, and how we'd know it was wrong
 ```
 
 `test_phase7_reported_bugs.py` is worth running on its own if you are reviewing
@@ -525,6 +526,21 @@ README exists not to do.
 - **The what's-new session cap is a guess.** `MAX_MARKER_AGE` is four hours
   (D-060), chosen as roughly one clinic session and validated against nothing.
   It should be set from how these charts are actually used.
+- **Contradiction detection catches three things well, not everything.** Allergy
+  vs administration, dose disagreement, and medication status. It rests on a
+  medication watchlist rather than a formulary, doses must match a numeric
+  pattern, and negation handling is a short lookbehind rather than real scope
+  detection. The failure mode is silence, never a wrong answer — but **the
+  absence of a contradiction flag is not evidence that the notes agree.**
+- **Confidence is a proxy, and an unvalidated one.** It measures hedging density
+  in the source transcript, which correlates with but is not the same as how
+  well the summary is supported. It has never been checked against labelled
+  data. Its one virtue over model self-report is that a reviewer can go and read
+  the thing it was computed from.
+- **Exposure bias is narrowed, not closed.** One suggestion slot per entry is
+  reserved for an unexposed tag, but feedback is still only ever collected on
+  items the system chose to surface. Closing it properly needs off-policy
+  evaluation against held-out charts.
 - **Frontend test coverage is narrow.** A vitest harness now covers
   `readSelectionRange` and the Glance View's action controls (25 tests), which
   are the pieces that fail silently. `EntryCard`, `Comments`, `Timeline`,

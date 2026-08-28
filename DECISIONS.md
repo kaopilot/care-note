@@ -1626,3 +1626,182 @@ tested. Three runs: P95 11.54 / 11.09 / 11.63 ms, against 14.26 / 13.30 / 15.94
 in Phase 6. Lower, on a deeper chart — which is container load, not an
 optimisation, and is written up that way in `ARCHITECTURE.md`. The older figures
 are kept visible beside the new ones rather than overwritten.
+
+---
+
+## Phase 8 — Evaluation and abstention (2026-08-28)
+
+Prompted by the 48-hour hint, which asks of the risk badge, the confidence label
+and the importance score: *what is it, how would we know if it were wrong, and
+what happens when it is?* Auditing the build against that question found three
+things already answered well (extractive attribution, redaction accuracy, the
+fatigue floor), two answered only on one code path, and two not answered at all.
+
+The shape of the miss is worth naming: in every case the *mechanism* existed and
+the *guarantee* did not. `_infer_risk()` was written, tested and correct — and
+ran on one of two paths. Confidence was derived from real evidence — on one of
+two paths. A guarantee that holds on the path you happened to exercise is not a
+guarantee; it is a coincidence with good documentation.
+
+### D-065 · Confidence is measured from the source on every path, never self-reported
+
+The offline summariser derived confidence from hedging density in the
+transcript. The live-model path took `parsed["confidence"]` — the model's own
+opinion of its reliability — clamped it to 0..1, and displayed it. Self-reported
+confidence is the thing the hint calls decoration, and it was decorating exactly
+the path a real deployment would use.
+
+`derived_confidence()` now runs on both paths and is what the clinician sees. A
+live model's self-report is stored in `model_self_reported_confidence` and never
+displayed: kept because a self-report that tracks the derived figure is evidence
+the model is calibrated and one that does not is evidence it is not, which is
+worth knowing later; not shown, because a number the model chose about itself
+cannot be checked by the person reading it.
+
+**Bands are numeric and defined once.** `high >= 0.75`, `medium 0.60-0.75`,
+`low < 0.60`. The chip renders the word and the percentage together, so "medium"
+is never a floating adjective. Two defects surfaced while doing this and are the
+reason the constant is now singular:
+
+* The hedging formula existed **twice** — in `_extractive_summary` and in the
+  new `derived_confidence` — which is precisely the drift the single-definition
+  rule exists to stop. Collapsed.
+* `glance.LOW_CONFIDENCE_THRESHOLD` restated `0.6` independently of the band
+  boundary. Nothing tied them together, so the card could have rendered
+  "medium" while the low-confidence flag fired beside it — worse than either
+  being wrong alone, because a reader who sees an interface contradict itself
+  stops believing all of it. Now imported, with a test asserting equality.
+
+**Honest limit:** hedging density measures how certain the *speakers* were,
+which correlates with but is not the same as how well the summary is supported.
+It has one property self-report does not — it is computed from something a
+reviewer can go and read. A number that can be checked against the transcript is
+worth more here than a better-calibrated one that cannot.
+
+### D-066 · Deterministic rules set a floor under risk; a model may only raise it
+
+`_infer_risk()` matches explicit high-risk terms and tagged clinical entities and
+is fully deterministic. It ran only when no live model was available. On the live
+path, `_coerce_risk(summary["risk_level"])` took the model's ordinal at its word
+— so a model that quietly called a transcript containing "chest pain" `low` would
+have moved the badge down, and nothing would have noticed.
+
+The stored level is now `max(model_proposed, deterministic_floor)`. The asymmetry
+is the whole point: **ordinal drift is only dangerous in one direction.** A model
+raising a level may have noticed something the keyword tables miss, which is a
+recall gain worth having. A model lowering one silently removes a warning, which
+is the failure the badge exists to prevent. Rules are a floor, not a ceiling.
+
+`model_proposed_risk` and `risk_floor_applied` are both persisted, and a "Risk
+set by rule" chip renders when they disagree, so a clinician asking "why does
+this say high?" can distinguish *a rule matched words in the transcript* from
+*a model felt strongly* without opening anything.
+
+### D-067 · Patient-facing content is a severity class, enforced structurally
+
+Showing a clinician a hallucinated line is a bad day — internal notes carry
+provenance, get audited, and sit in front of someone trained to disbelieve them.
+Showing a **patient** one is a different category of harm: no second reader, no
+provenance rail to open, no basis to doubt.
+
+The build already had the right behaviour — the scribe never wrote
+`patient_summary` or `patient_instruction`, and AI types are absent from the
+patient's viewable set — but it was an accident of how the code happened to be
+written, not a rule anything enforced. Nothing would have failed if a later
+edit had changed it.
+
+**The rule is structural rather than procedural, deliberately.** The obvious
+alternative is to generate patient-facing text and require clinician approval
+before it publishes. Under time pressure, an approval step is a thing people
+click through; it produces an audit trail showing a human approved something
+they did not read. So instead: `PATIENT_FACING_TYPES` is writable only by
+`Role.CLINICIAN`, `Role.SYSTEM` appears in no `WRITABLE_TYPES` entry at all, and
+`assert_never_patient_facing()` runs at **import time** against the scribe's own
+type map so a future edit fails to load rather than shipping model output to a
+patient. A clinician may read an AI summary and write an instruction from it —
+that path is intended, and the human authorship is real because they type the
+words.
+
+`test_the_guard_actually_fires` exists because a guard nobody has watched fail
+is not known to work.
+
+### D-068 · Contradictions between entries, including human-human, detected and never resolved
+
+Phase 2 answered the question the brief asked: what happens when a clinician
+disagrees with an AI note. That is the easier question, because the resolution
+rule is given. It is not the question that hurts people.
+
+**Clinicians and nurses contradict each other**, in different notes, hours apart,
+and nobody is wrong on purpose. A nurse records "allergic to penicillin"; a
+clinician, reading a different part of a fragmented record, prescribes
+amoxicillin. Neither note is AI output, so no precedence rule applies, and
+neither author can see the contradiction — because the fragmentation this
+product exists to fix is the reason they are not reading the same page.
+
+`services/contradictions.py` detects three classes, scoped to where being wrong
+is worst: **allergy against administration** (including across drug class,
+which is what catches penicillin→amoxicillin), **dose disagreement** on the same
+drug, and **status disagreement** (started here, stopped there).
+
+**Extraction, not inference, and no model.** Every finding is a regex or
+vocabulary match over stored text, so it can be re-derived, points at the exact
+two entries that produced it, and cannot drift between runs. A model asked "do
+these contradict?" would be more sensitive and would also produce confident
+disagreements that are not there — and a false contradiction on an allergy is
+not a harmless false positive. It teaches a clinician that the flag means
+nothing, which disarms it for the case that matters. Two such false positives
+were caught in smoke testing before the tests were written:
+
+* `1g` and `1000mg` read as a dose conflict. Mass units now normalise to mg.
+* "Patient denies allergy to aspirin" fired a **critical** allergy flag. The
+  main extraction loop checked negation; the free-text allergen fallback did
+  not, and helpfully re-added the mention the main loop had correctly skipped.
+
+**It resolves nothing.** There is no precedence rule for human-human
+contradiction and inventing one would be a clinical decision this system has no
+standing to make — "most recent wins" would silently discard an allergy recorded
+last year in favour of a prescription written today. Both entries are surfaced,
+both are quoted, both are clickable, and a person decides. The system's job here
+is to make the disagreement impossible to miss, not to settle it.
+
+It renders above everything else on the Glance View, including "what changed". A
+clinician who reads exactly one line of the card should have read the most
+dangerous thing the system knows.
+
+**Recall is honestly limited** and stated in `ARCHITECTURE.md`: detection rests
+on `features.MEDICATIONS`, a watchlist rather than a formulary, and on doses
+matching a numeric pattern. Negation handling is a 40-character lookbehind, not
+real scope detection. A contradiction in vocabulary this module does not know is
+simply not found — the failure mode is silence, never a wrong answer. A clinician
+who believes this catches everything is worse off than one who knows it catches
+three things well.
+
+### D-069 · One suggestion slot is reserved against exposure bias
+
+The learning loop only ever sees feedback on spans it chose to surface. A tag
+scoring just below the cut is never shown, so never accepted, so never gains
+weight, so is never shown. The ranking converges on whatever it favoured early
+and has no mechanism for discovering it was wrong. This is a structural property
+of learning from your own output, not a tuning problem, and it was previously
+not addressed anywhere in the build.
+
+One slot per entry is reserved for a candidate carrying a tag the clinic has
+never given feedback on, when one exists and clears `MIN_SUGGESTION_SCORE`.
+
+**Deterministic, not epsilon-greedy.** A coin flip would make the Glance View
+differ between two loads of the same unchanged chart. On a clinical surface that
+is a worse property than the bias it fixes: a clinician who sees the card change
+under them stops trusting that it reflects the record. Selection is a function of
+(entry content, feedback history), so the same chart shows the same card, and the
+exploration slot resolves itself the moment the clinic gives feedback on that tag
+once.
+
+It displaces the **weakest** of the top candidates, never the strongest, and is
+bounded by the same minimum-score floor as everything else — so it can promote an
+under-explored candidate over a marginally better known one, and can never
+surface something the rules found clinically meaningless.
+
+**This narrows the loop; it does not close it.** Feedback is still only ever
+collected on surfaced items, and a tag that never appears in any entry is never
+explored. A real answer needs off-policy evaluation against held-out charts,
+which needs data this build does not have.
