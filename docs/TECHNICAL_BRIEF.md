@@ -117,9 +117,12 @@ model.
 
 **Measured:** P95 ≤ 300 ms target. A middleware reports `X-Response-Time-Ms` per
 request — request in, queries run, payload serialised, response out. 200
-iterations after 20 discarded warm-ups, 10-entry chart with 6 highlights, SQLite
-on local disk. Three consecutive runs: **P95 14.26 / 13.30 / 15.94 ms.** Range
-reported, not the best run.
+iterations after 20 discarded warm-ups, 11-entry chart with 6 highlights, SQLite
+on local disk. Re-measured after the Phase 7 fixes touched every timestamp in
+this payload; three consecutive runs: **P95 11.54 / 11.09 / 11.63 ms.** Range
+reported, not the best run. These are lower than the 13.30–15.94 ms recorded
+before those fixes, which is container load rather than an improvement anyone
+engineered — attributing it to the change would be reading noise as a result.
 
 This **excludes network transit and browser render** — those depend on
 deployment and device, and folding loopback in would invent precision. The
@@ -140,7 +143,10 @@ unlikely, but the test that settles it is a loaded staging environment.
 clinician decision; no AI claim reaches the card as fact on its own authority.
 One click, inline, no navigation, immediate confirmation — because this decision
 is also the training signal, and a high-friction control starves the loop. The
-interaction cost is a design constraint, not a nicety.
+interaction cost is a design constraint, not a nicety. A clinician's own
+hand-marked span is recorded `accepted` on creation and carries a scoring bonus,
+so human judgement outranks machine suggestion on the card by construction —
+which is precisely what silently broke in Phase 7 (§6).
 
 **2. Visible confidence, derived not asserted.** On the offline path confidence
 comes from hedging density in the source transcript: the patient session full of
@@ -193,34 +199,49 @@ the system stops surfacing. A Malay vocabulary now maps each term to the
 cosmetic — tags are the keys Phase 4 learns against, and a separate
 `symptom:bengkak` would have split one concept into two features and stopped a
 clinic's learned attention transferring across the language its patients used.
-Scope is deliberately narrow: only terms whose English counterpart already
-exists, so no English input changes behaviour. Still unbuilt: translation,
-non-English summary generation, and every language but Malay. The fourteen terms
-need native-speaker and clinical review — the mechanism is proven, the word list
-is a demonstration. Testing it also surfaced that **negation is unhandled in
-both languages** ("Patient denies chest pain" tags chest pain); pre-existing,
-now pinned by tests in both languages so a fix cannot be applied to one and not
-the other.
+Still unbuilt: translation, non-English summary generation, every language but
+Malay. The fourteen terms need native-speaker and clinical review — the
+mechanism is proven, the word list is a demonstration. Testing it also surfaced
+that **negation is unhandled in both languages** ("Patient denies chest pain"
+tags chest pain); pre-existing, now pinned in both so a fix cannot be applied to
+one and not the other.
 
 **Deferred: multilingual summary generation and handwriting capture (D-019).**
-Summary generation in a second language is a *time* deferral only — the path is
-a second-language summary from the existing LLM call. Handwriting OCR was
-deferred
-**structurally**: a different ingestion pipeline (image → OCR → redact →
-summarise) where redaction is materially harder on noisy output — one
+Summary generation in a second language is a *time* deferral only. Handwriting
+OCR was deferred **structurally**: a different ingestion pipeline (image → OCR →
+redact → summarise) where redaction is materially harder on noisy output — one
 mis-recognised character defeats a pattern that would have caught an identifier
 — and medical handwriting OCR is hard even for well-resourced products. Ambient
 voice capture serves the same "fast unstructured capture" need more safely.
 
-**One defect worth reporting.** The final pass found every enum column is
-declared `Mapped[StrEnum]` but backed by `String`, so reloaded rows return plain
-`str` and three `is` comparisons were silently dead branches (D-055) — most
-visibly, superseded highlight suggestions were never deleted and the Top Card
-rendered every claim twice. It was live through 334 passing tests and was found
-by *looking at the screen*. Fixed and pinned by regressions plus a source scan;
-the column-type migration is deferred rather than attempted hours before
-submission. Reported because the honest version of "structural enforcement
-catches mistakes" includes the class it missed.
+**Defects found after the build was "done", and what they have in common.** The
+final pass found every enum column is declared `Mapped[StrEnum]` but backed by
+`String`, so reloaded rows return plain `str` and three `is` comparisons were
+silently dead branches (D-055) — most visibly, superseded highlight suggestions
+were never deleted and the Top Card rendered every claim twice. Four more
+surfaced afterwards from someone simply using the thing (D-059–D-062): a
+clinician's hand-marked span vanished from the Glance View; confirming one
+suggestion made every other suggestion on the open card return 404; "new since
+your last visit" stayed empty for an entire first session and then stopped
+advancing for anyone who refreshed often; and a task could be raised and never
+closed. A fifth, found while reproducing those: every timestamp left the API
+without a UTC offset, so a browser read it as local time and a note written
+seconds ago rendered as "8h ago" in the timezone this was demoed in.
+
+**All of them survived a green suite, and for the same reason.** Each lives in
+the seam between two pieces of individually correct code. The manual-highlight
+bonus is right where it is written and right where it is recomputed; only the
+ordering of the two is wrong. The timestamps are right in the database and right
+in the browser; only the contract between them was unstated. Component-level
+tests cannot see this class, which is why the regressions are written as
+end-to-end sequences — open the chart, write a note, reload — and why ten of the
+fifteen fail against the previous commit. A test that has never seen its
+regression is a description of current behaviour wearing a test's clothing.
+
+Reported at this length because the honest version of "structural enforcement
+catches mistakes" has to include the classes it missed. The enum column-type
+migration and a real end-to-end browser test are both deferred rather than
+attempted hours before submission.
 
 ## 7. Security posture
 
@@ -254,6 +275,8 @@ than a weaker one everybody understands.
 | Per-user normalisation of learning signals | **Known gap** — one enthusiast counts as consensus |
 | Enum columns typed `String` not `Enum` | **Known gap** — structural fix for D-055 |
 | Formal accessibility / WCAG audit | **Known gap** — colour is never the sole signal, but no audit was run |
+| Wire-format timezone correctness | **Implemented (by convention)** — UTC offsets via one annotation, pinned by tests that walk payloads; a new endpoint can still regress it (D-061) |
+| End-to-end browser testing | **Known gap** — component tests mock `Api`, so a change to the fetch layer is caught by neither suite |
 
 **Plainly:** locally there is no TLS and no encryption at rest — plain HTTP on
 localhost, an unencrypted gitignored SQLite file. Both are deployment
@@ -262,9 +285,12 @@ production shape; the honest consequence is that **this build is not safe for
 real PHI as-is**, which the README states too so it cannot be missed by someone
 who opens one file.
 
-**Verification.** 385 tests, no API key or network needed. Access-control and
-history tests were **deliberately broken to confirm they can fail** — reversing
-D-004 fails exactly the staff-visibility tests, removing the clinic filter fails
-15, disabling the conflict guard fails 3. A security test that cannot fail is
-worse than none, because it is mistaken for coverage. Logs were grepped for
-planted names, identifiers and body text after exercising every route: zero hits.
+**Verification.** 400 backend tests plus 25 frontend component tests, no API key
+or network needed. Access-control and history tests were **deliberately broken to
+confirm they can fail** — reversing D-004 fails exactly the staff-visibility
+tests, removing the clinic filter fails 15, disabling the conflict guard fails 3.
+The same discipline applied to the Phase 7 regressions: 10 of 25 frontend tests
+and 10 of 15 backend ones fail when the code they cover is reverted. A security
+test that cannot fail is worse than none, because it is mistaken for coverage.
+Logs were grepped for planted names, identifiers and body text after exercising
+every route: zero hits.

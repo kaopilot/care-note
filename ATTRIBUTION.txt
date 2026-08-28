@@ -236,7 +236,13 @@ The uvicorn[standard] extra additionally installs uvloop (MIT/Apache-2.0),
 httptools (MIT), watchfiles (MIT), websockets (BSD-3-Clause) and
 python-dotenv (BSD-3-Clause).
 
-No document-generation library is vendored: docs/TECHNICAL_BRIEF.pdf was
-rendered from the Markdown source with headless Chrome at packaging time. It is
-not produced by the application and nothing in backend/ or frontend/ depends on
-it.
+No document-generation library is vendored: docs/TECHNICAL_BRIEF.pdf is
+rendered from the Markdown source at packaging time by scripts/build_brief.sh,
+using pandoc (GPL-2.0-or-later), wkhtmltopdf (LGPL-3.0-or-later) and qpdf
+(Apache-2.0). Earlier revisions used headless Chrome; the toolchain changed in
+the Phase 7 pass because Chrome was not available in the packaging environment,
+and the note is corrected here rather than left describing a tool that was not
+in fact used. These are build-time command-line tools, not libraries: nothing in
+backend/ or frontend/ imports them, no application code depends on them, and
+their licences do not reach the source. The Markdown remains the source of
+truth; the PDF is a convenience rendering of it.

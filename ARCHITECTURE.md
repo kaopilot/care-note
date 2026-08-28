@@ -316,22 +316,27 @@ Target: Glance View P95 ≤ 300 ms on a warm path.
 ### Measured
 
 `scripts/bench_glance.py`, 200 iterations after 20 discarded warm-up requests,
-against a chart of 8 entries carrying 6 highlights, SQLite on local disk:
+against a chart of 11 entries carrying 6 highlights, SQLite on local disk:
 
 | Segment | p50 | **p95** | p99 | max |
 |---|---|---|---|---|
-| Server handling (`X-Response-Time-Ms`) | 10.96 ms | **14.26 ms** | 16.08 ms | 16.89 ms |
-| In-process wall clock | 11.94 ms | 15.74 ms | 17.68 ms | 18.49 ms |
+| Server handling (`X-Response-Time-Ms`) | 10.46 ms | **11.54 ms** | 12.97 ms | 13.41 ms |
+| In-process wall clock | 11.36 ms | 12.53 ms | 14.51 ms | 19.53 ms |
 
-**P95 server handling: 14.26 ms, against a 300 ms budget.**
+**P95 server handling: 11.54 ms, against a 300 ms budget.**
 
-Re-measured in Phase 6 against the final build, three consecutive runs:
-P95 **14.26 / 13.30 / 15.94 ms**. The range is reported rather than the best
-run. It sits slightly above the 10.8–13.2 ms range recorded after Phase 4; the
-chart is two entries deeper and the container was under different load, and at
-roughly 5% of the budget neither the spread nor the drift changes any
-conclusion. Reported because quietly keeping the older, prettier number would
-be the kind of thing this document exists to not do.
+Re-measured in Phase 7 after the fixes in D-059–D-061 touched every timestamp in
+this payload, three consecutive runs: P95 **11.54 / 11.09 / 11.63 ms**. The
+range is reported rather than the best run.
+
+The history, kept rather than overwritten: 10.8–13.2 ms after Phase 4,
+14.26/13.30/15.94 ms in Phase 6, and this range now. The Phase 7 figures are the
+lowest of the three despite the chart being deepest, which is container load
+rather than anything anyone optimised — reading a 3 ms move at roughly 4% of the
+budget as an improvement would be reading noise as a result. The Phase 6 numbers
+are left visible above for the same reason they were reported then: quietly
+keeping whichever number is prettiest is the kind of thing this document exists
+to not do.
 
 ### Method, and what the number excludes
 
@@ -898,16 +903,35 @@ actor id, action, target type/id, clinic id, timestamp, and scalar counts
 (`{'returned': 7}`, `{'highlights': 6}`, `{'redactions': 4}`). The
 `llm.request` line records `prompt_chars` as a number and no prompt.
 
-### The screenshot that found a defect no test did
+### The defects no test did find, and what they share
 
 The duplicate-highlight bug (D-055) was live through 334 passing tests and was
 found by looking at the Glance View. The tests asserted that highlights resolve,
 that provenance points at real spans, that scoring shifts with learning — all
 true of a duplicated row. None asserted *how many* rows came back, because
-nobody thought to. The regression suite now does.
+nobody thought to.
 
-This is worth stating plainly in a document that spends a lot of words on
-structural enforcement: source scans and fused dependencies catch the classes of
-error they were designed for, and this one walked past all of them. Looking at
-the product remains a distinct verification method, not a formality once the
-tests are green.
+Five more were reported afterwards by someone using the build, all live through
+385 passing tests (D-059–D-062): a hand-marked highlight vanished from the card;
+confirming one suggestion made the others 404; "new since your last visit"
+stayed empty for a whole session and then stopped advancing; a task could be
+raised and never closed; and every timestamp left the API without a UTC offset,
+so a note written seconds ago rendered "8h ago" in the timezone this was demoed
+in.
+
+**They are one class, not five accidents.** Each lives in the seam between two
+pieces of individually correct code. The manual-highlight bonus is right where
+it is written and right where it is recomputed — the ordering of the two is what
+is wrong. The timestamps are right in the database and right in the browser —
+the contract between them was never stated. Nothing that tests a unit in
+isolation can see this, and the suite was heavily weighted toward exactly that.
+The Phase 7 regressions are written as end-to-end sequences instead — open the
+chart, write a note, reload — and ten of fifteen fail against the previous
+commit.
+
+Worth stating plainly in a document that spends a lot of words on structural
+enforcement: source scans and fused dependencies catch the classes of error they
+were designed for, and every one of these walked past all of them. Two methods
+they did not walk past were *looking at the product* and *someone else using
+it*. Neither is a formality once the tests are green; on this build they were
+the only things that worked.

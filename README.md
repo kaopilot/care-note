@@ -17,8 +17,10 @@ honest list of what is and is not finished — including the parts that are
 stubbed.
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
-(3 pages, PDF alongside it) · [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (385 tests).
+(2 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
+[`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (400 tests) ·
+`cd frontend && npm test` (25 component tests).
 
 ---
 

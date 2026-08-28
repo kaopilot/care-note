@@ -145,11 +145,19 @@ about it."*
 - **What is stubbed:** the speech recogniser is a simulated stub — it does not
   transcribe, and it says so on every surface it touches. Being straight about
   this is worth more than implying a capability the build does not have.
-- **The defect the tests missed:** superseded highlights were never deleted, so
-  the Top Card rendered every claim twice. It was live through 334 passing tests
-  and was found by looking at the screen. Fixed, pinned by regressions and a
-  source scan (D-055). Reviewers respond well to a candidate who found their own
-  bug and says so.
+- **The defects the tests missed, and why they all look alike:** superseded
+  highlights were never deleted, so the Top Card rendered every claim twice —
+  live through 334 passing tests, found by looking at the screen (D-055). Five
+  more surfaced afterwards from using the thing (D-059–D-062): a clinician's own
+  highlight vanished from the card, confirming one suggestion 404'd the rest,
+  "new since your last visit" stayed empty for a whole session, a task could
+  never be closed, and every timestamp shipped without a UTC offset so a note
+  written seconds ago read "8h ago" in SGT. Each lives in the seam between two
+  pieces of individually correct code, which is the class a component-level
+  suite cannot see — so the regressions are end-to-end sequences, and ten of
+  fifteen fail against the previous commit. Say this plainly if asked what you
+  would fix next; a candidate who can name the shape of their own blind spot is
+  worth more than one with nothing to report.
 
 ## Do not
 

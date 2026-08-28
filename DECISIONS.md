@@ -1594,3 +1594,35 @@ caught by neither suite. There is no end-to-end browser test. And the harness
 adds five devDependencies (recorded in `ATTRIBUTION.txt`) to a project that
 previously shipped a frontend with none, which is a real cost for a 72-hour
 build and is the reason it was deferred past Phase 6 in the first place.
+
+### D-064 · The brief PDF is built by a script, and the toolchain note was wrong
+
+`docs/TECHNICAL_BRIEF.pdf` was previously a one-off export, and `ATTRIBUTION.txt`
+described it as rendered with headless Chrome. Two problems surfaced when the
+Phase 7 fixes made the Markdown source move: the PDF silently went stale, and
+Chrome was not available to regenerate it, so the attribution described a tool
+that was not in fact used.
+
+`scripts/build_brief.sh` now renders it — pandoc for Markdown, wkhtmltopdf for
+layout, qpdf to drop the blank trailing page wkhtmltopdf emits when content ends
+near a page boundary. The script **fails rather than installs** if the result
+falls outside the required 2–3 pages, because the type sizes in it are tuned to
+that constraint and the failure mode otherwise is a four-page brief nobody
+notices until a reviewer does.
+
+`ATTRIBUTION.txt` records the real toolchain and states that it changed. These
+are build-time command-line tools rather than libraries: nothing in `backend/` or
+`frontend/` imports them and their licences do not reach the source, but naming
+them is cheaper than leaving a reviewer to wonder.
+
+**The brief is now 2 pages rather than 3**, having grown by the Phase 7 material
+and then been trimmed harder elsewhere — mostly the multilingual and deferred-
+scope paragraphs, which were the longest passages carrying the least argument.
+
+**Latency figures were re-measured, not carried forward.** The Phase 7 changes
+touched the serialisation of every timestamp in the Glance View payload, so
+quoting the Phase 6 number would have been asserting something no longer
+tested. Three runs: P95 11.54 / 11.09 / 11.63 ms, against 14.26 / 13.30 / 15.94
+in Phase 6. Lower, on a deeper chart — which is container load, not an
+optimisation, and is written up that way in `ARCHITECTURE.md`. The older figures
+are kept visible beside the new ones rather than overwritten.
