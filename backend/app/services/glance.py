@@ -46,6 +46,7 @@ from app.models import (
     Task,
     User,
 )
+from app.core.timeutil import iso_utc
 from app.security import policy
 from app.services import highlights as highlight_service
 from app.services import scoring
@@ -53,6 +54,15 @@ from app.services import scoring
 # A page refresh is not a new visit. Within this window the "since" marker holds
 # still, so reading the what's-new group does not destroy it (D-033).
 VIEW_SESSION_GAP = timedelta(minutes=20)
+
+# ...but a marker that only rolls forward on a >20-minute gap never rolls
+# forward at all for someone who keeps the chart open and refreshes through a
+# shift. The window just widens, and "new since your last visit" quietly becomes
+# "everything since this morning". This caps how stale the comparison point may
+# get: past it, the marker advances on the next load even mid-session. Chosen as
+# roughly one clinic session — long enough that a working session is not
+# interrupted, short enough that the label stays true. See DECISIONS.md D-060.
+MAX_MARKER_AGE = timedelta(hours=4)
 
 # Below this, an AI summary is flagged as low confidence in the UI. Set where
 # the offline summariser lands on a transcript full of hedging, so the flag has
@@ -113,13 +123,21 @@ def touch_view(db: Session, *, user_id: str, patient: Patient) -> datetime | Non
     now = _now()
 
     if row is None:
+        # `previous_viewed_at` is seeded to now rather than left NULL. Returning
+        # None here is right — captioning a whole chart as new on the one view
+        # that most needs to be readable is noise — but leaving the column NULL
+        # meant the NEXT load in the same session also had nothing to compare
+        # against, and so did the one after that. A clinician could open a
+        # chart, write a note, reload, and still be told this was their first
+        # look with nothing new. Seeding it makes the second load of a session
+        # compare against the moment the session started. See D-060.
         db.add(
             PatientView(
                 user_id=user_id,
                 patient_id=patient.id,
                 clinic_id=patient.clinic_id,
                 last_viewed_at=now,
-                previous_viewed_at=None,
+                previous_viewed_at=now,
                 view_count=1,
             )
         )
@@ -129,8 +147,13 @@ def touch_view(db: Session, *, user_id: str, patient: Patient) -> datetime | Non
     last = _aware(row.last_viewed_at) or now
     since = _aware(row.previous_viewed_at)
 
-    if now - last > VIEW_SESSION_GAP:
-        # A genuinely new visit: the old view time becomes the comparison point.
+    new_visit = now - last > VIEW_SESSION_GAP
+    marker_stale = since is not None and now - since > MAX_MARKER_AGE
+
+    if new_visit or marker_stale:
+        # A genuinely new visit, or a session that has run long enough that the
+        # old comparison point no longer means "last time you looked": the
+        # previous view time becomes the marker.
         since = last
         row.previous_viewed_at = row.last_viewed_at
     row.last_viewed_at = now
@@ -174,8 +197,8 @@ def build_glance(db: Session, *, role: Role, user_id: str, patient: Patient) -> 
             "mrn": patient.mrn,
             "dob": patient.dob,
         },
-        "generated_at": _now().isoformat(),
-        "since": since.isoformat() if since else None,
+        "generated_at": iso_utc(_now()),
+        "since": iso_utc(since),
         "whats_new": _whats_new(entries, since, ai_notes),
         "highlights": _top_highlights(db, patient, by_id, ai_notes, role),
         "open_actions": _open_actions(db, patient, names),
@@ -201,7 +224,7 @@ def _entry_brief(entry: Entry, ai_notes: dict) -> dict:
         "type": str(entry.type),
         "author_role": str(entry.author_role),
         "author_id": entry.author_id,
-        "timestamp": entry.timestamp.isoformat(),
+        "timestamp": iso_utc(entry.timestamp),
         "title": entry.title,
         "preview": (first_line[0][:180] if first_line else ""),
         "risk_level": str(entry.risk_level),
@@ -222,7 +245,7 @@ def _whats_new(entries: list[Entry], since: datetime | None, ai_notes: dict) -> 
         return {"since": None, "count": 0, "entries": [], "first_visit": True}
     fresh = [entry for entry in entries if (_aware(entry.timestamp) or _now()) > since]
     return {
-        "since": since.isoformat(),
+        "since": iso_utc(since),
         "count": len(fresh),
         "entries": [_entry_brief(entry, ai_notes) for entry in fresh[:MAX_WHATS_NEW]],
         "first_visit": False,
@@ -273,7 +296,7 @@ def _top_highlights(
                 "source_version_number": row.source_version_number,
                 "entry_type": str(entry.type),
                 "entry_title": entry.title,
-                "entry_timestamp": entry.timestamp.isoformat(),
+                "entry_timestamp": iso_utc(entry.timestamp),
                 "entry_author_role": str(entry.author_role),
                 "is_ai_scribed": EntryType(entry.type) in AI_SCRIBED_TYPES,
                 "ai_confidence": note.confidence if note else None,
@@ -309,8 +332,8 @@ def _open_actions(db: Session, patient: Patient, names: dict[str, str]) -> list[
             "assigned_to_name": names.get(task.assigned_to or "", "Unassigned"),
             "assigned_to_role": str(task.assigned_to_role) if task.assigned_to_role else None,
             "entry_id": task.entry_id,
-            "due_at": task.due_at.isoformat() if task.due_at else None,
-            "created_at": task.created_at.isoformat(),
+            "due_at": iso_utc(task.due_at),
+            "created_at": iso_utc(task.created_at),
         }
         for task in tasks
     ]
@@ -341,7 +364,7 @@ def _open_actions(db: Session, patient: Patient, names: dict[str, str]) -> list[
                 "assigned_to_role": None,
                 "entry_id": comment.entry_id,
                 "due_at": None,
-                "created_at": comment.created_at.isoformat(),
+                "created_at": iso_utc(comment.created_at),
                 "author_name": names.get(comment.author_id, "Unknown"),
                 "author_role": str(comment.author_role),
             }
@@ -369,7 +392,7 @@ def _risk_flags(entries: list[Entry]) -> list[dict]:
             "label": RISK_LABEL.get(str(entry.risk_level), "Risk"),
             "entry_type": str(entry.type),
             "title": entry.title,
-            "timestamp": entry.timestamp.isoformat(),
+            "timestamp": iso_utc(entry.timestamp),
             "is_ai_scribed": EntryType(entry.type) in AI_SCRIBED_TYPES,
         }
         for entry in flagged[:MAX_RISK_FLAGS]
@@ -399,7 +422,7 @@ def _confidence_flags(entries: list[Entry], ai_notes: dict) -> list[dict]:
                 "label": "Low AI confidence — verify against source",
                 "session_id": note.session_id,
                 "model_used": note.model_used,
-                "timestamp": entry.timestamp.isoformat(),
+                "timestamp": iso_utc(entry.timestamp),
             }
         )
     return out
@@ -424,7 +447,7 @@ def _conflicts(entries: list[Entry], by_id: dict[str, Entry]) -> list[dict]:
                 "supersedes_entry_id": entry.supersedes_entry_id,
                 "supersedes_type": str(superseded.type) if superseded else None,
                 "supersedes_title": superseded.title if superseded else None,
-                "timestamp": entry.timestamp.isoformat(),
+                "timestamp": iso_utc(entry.timestamp),
             }
         )
     return out
@@ -485,12 +508,12 @@ def build_patient_glance(db: Session, *, user_id: str, patient: Patient) -> dict
     next_steps: list[dict] = []
     for entry in instructions[:2]:
         for line in _bullet_lines(entry.content):
-            next_steps.append({"text": line, "entry_id": entry.id, "written_at": entry.timestamp.isoformat()})
+            next_steps.append({"text": line, "entry_id": entry.id, "written_at": iso_utc(entry.timestamp)})
 
     return {
         "patient": {"id": patient.id, "name": patient.name},
-        "generated_at": _now().isoformat(),
-        "since": since.isoformat() if since else None,
+        "generated_at": iso_utc(_now()),
+        "since": iso_utc(since),
         "new_since_last_visit": (
             0 if since is None
             else sum(1 for e in entries if (_aware(e.timestamp) or _now()) > since)
@@ -502,7 +525,7 @@ def build_patient_glance(db: Session, *, user_id: str, patient: Patient) -> dict
                 "id": entry.id,
                 "title": entry.title,
                 "content": entry.content,
-                "written_at": entry.timestamp.isoformat(),
+                "written_at": iso_utc(entry.timestamp),
             }
             for entry in (summaries + instructions)[:3]
         ],
@@ -511,7 +534,7 @@ def build_patient_glance(db: Session, *, user_id: str, patient: Patient) -> dict
                 "id": entry.id,
                 "title": entry.title,
                 "content": entry.content,
-                "written_at": entry.timestamp.isoformat(),
+                "written_at": iso_utc(entry.timestamp),
             }
             for entry in own_notes[:3]
         ],
