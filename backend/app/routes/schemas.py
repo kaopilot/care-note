@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.core.enums import AI_SCRIBED_TYPES, EntryType
 from app.core.timeutil import UtcDateTime
+from app.services import scribe
 from app.models import Entry
 
 
@@ -47,6 +48,8 @@ class EntryOut(BaseModel):
     supersedes_entry_id: str | None = None
     decay_state: str = "hot"
     ai_confidence: float | None = None
+    ai_confidence_band: str | None = None
+    risk_floor_applied: bool = False
     ai_session_id: str | None = None
     ai_model_used: str | None = None
     ai_redaction_count: int | None = None
@@ -85,6 +88,10 @@ def entry_out(
         supersedes_entry_id=entry.supersedes_entry_id,
         decay_state=str(entry.decay_state),
         ai_confidence=getattr(ai_note, "confidence", None),
+        ai_confidence_band=(
+            scribe.confidence_band(ai_note.confidence) if ai_note is not None else None
+        ),
+        risk_floor_applied=bool(getattr(ai_note, "risk_floor_applied", False)),
         ai_session_id=getattr(ai_note, "session_id", None),
         ai_model_used=getattr(ai_note, "model_used", None),
         ai_redaction_count=getattr(ai_note, "redaction_count", None),

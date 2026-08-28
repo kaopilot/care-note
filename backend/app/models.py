@@ -269,9 +269,19 @@ class AIScribedNote(Base):
     # Redaction accounting — proof, per note, that the chokepoint ran.
     redaction_applied: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     redaction_count: Mapped[int] = mapped_column(Integer, default=0)
-    # Confidence reported by the summariser, 0..1. Surfaced in the UI so a
-    # clinician can calibrate trust rather than being asked to take it on faith.
+    # Confidence DERIVED from the source transcript, 0..1. This is the figure the
+    # UI shows. See scribe.derived_confidence and the band constants beside it.
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What the model said about itself, when a live model ran. Recorded so the
+    # two can be compared later — a self-report that tracks the derived figure
+    # is evidence the model is calibrated; one that does not is evidence it is
+    # not. Never displayed, never scored on. Null on the offline path (D-065).
+    model_self_reported_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # True when deterministic rules raised the risk level above what the model
+    # proposed. Makes "why does this say high?" answerable from the row (D-066).
+    risk_floor_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # The level the model asked for, kept whether or not it was honoured.
+    model_proposed_risk: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     entry: Mapped[Entry] = relationship(back_populates="ai_note")
 

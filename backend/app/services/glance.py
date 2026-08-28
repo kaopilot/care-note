@@ -50,6 +50,8 @@ from app.core.timeutil import iso_utc
 from app.security import policy
 from app.services import highlights as highlight_service
 from app.services import scoring
+from app.services import contradictions as contradiction_service
+from app.services import scribe
 
 # A page refresh is not a new visit. Within this window the "since" marker holds
 # still, so reading the what's-new group does not destroy it (D-033).
@@ -64,14 +66,21 @@ VIEW_SESSION_GAP = timedelta(minutes=20)
 # interrupted, short enough that the label stays true. See DECISIONS.md D-060.
 MAX_MARKER_AGE = timedelta(hours=4)
 
-# Below this, an AI summary is flagged as low confidence in the UI. Set where
-# the offline summariser lands on a transcript full of hedging, so the flag has
-# something real to fire on rather than being decorative.
-LOW_CONFIDENCE_THRESHOLD = 0.6
+# Below this, an AI summary is flagged as low confidence in the UI. Imported
+# from `scribe` rather than restated: the number that decides the badge and the
+# number that defines the band must be the same one, or the card can say
+# "medium" while the flag fires. See scribe.CONFIDENCE_LOW_BAND (D-065).
+LOW_CONFIDENCE_THRESHOLD = scribe.CONFIDENCE_LOW_BAND
 
 MAX_HIGHLIGHTS = 6
 MAX_WHATS_NEW = 8
 MAX_RISK_FLAGS = 4
+# Contradictions are capped like everything else on the card, but the cap sits
+# above the others: an unreconciled allergy conflict is the single most
+# dangerous thing this system can know, and burying the fourth one to protect
+# glanceability is the wrong trade. They are sorted most-severe-first, so a
+# truncated list drops status disagreements before it drops allergies.
+MAX_CONTRADICTIONS = 5
 
 RISK_ORDER = {
     str(RiskLevel.CRITICAL): 4,
@@ -205,6 +214,7 @@ def build_glance(db: Session, *, role: Role, user_id: str, patient: Patient) -> 
         "risk_flags": _risk_flags(entries),
         "confidence_flags": _confidence_flags(entries, ai_notes),
         "conflicts": _conflicts(entries, by_id),
+        "contradictions": _contradictions(entries),
         "counts": _counts(db, patient, entries),
     }
 
@@ -231,6 +241,8 @@ def _entry_brief(entry: Entry, ai_notes: dict) -> dict:
         "risk_label": RISK_LABEL.get(str(entry.risk_level), "No risk flag"),
         "is_ai_scribed": EntryType(entry.type) in AI_SCRIBED_TYPES,
         "confidence": note.confidence if note else None,
+        "confidence_band": scribe.confidence_band(note.confidence) if note else None,
+        "risk_floor_applied": bool(note.risk_floor_applied) if note else False,
         "version_number": entry.version_number,
     }
 
@@ -419,6 +431,7 @@ def _confidence_flags(entries: list[Entry], ai_notes: dict) -> list[dict]:
                 "type": str(entry.type),
                 "title": entry.title,
                 "confidence": round(note.confidence, 2),
+                "confidence_band": scribe.confidence_band(note.confidence),
                 "label": "Low AI confidence — verify against source",
                 "session_id": note.session_id,
                 "model_used": note.model_used,
@@ -426,6 +439,46 @@ def _confidence_flags(entries: list[Entry], ai_notes: dict) -> list[dict]:
             }
         )
     return out
+
+
+def _contradictions(entries: list[Entry]) -> list[dict]:
+    """Clinical disagreements between two entries, including human-human ones.
+
+    Separate from `_conflicts` on purpose. That surface reports a resolution
+    that has already happened — a clinician overrode an AI note and the record
+    says so. This one reports an **unresolved** disagreement between two
+    entries where no precedence rule applies, because both were written by
+    people. The clinician is not being told what the system decided; they are
+    being told that two parts of their own record disagree and that nobody has
+    reconciled them.
+
+    Scoped to allergies, doses and medication status — see
+    `services/contradictions.py` for why detection is deterministic and why it
+    resolves nothing.
+    """
+    found = contradiction_service.detect(entries)
+    return [
+        {
+            "kind": item.kind,
+            "severity": str(item.severity),
+            "subject": item.subject,
+            "detail": item.detail,
+            "human_human": item.human_human,
+            "left": {
+                "entry_id": item.left_entry_id,
+                "pointer": item.left_pointer,
+                "quote": item.left_quote,
+                "is_ai": item.left_is_ai,
+            },
+            "right": {
+                "entry_id": item.right_entry_id,
+                "pointer": item.right_pointer,
+                "quote": item.right_quote,
+                "is_ai": item.right_is_ai,
+            },
+        }
+        for item in found[:MAX_CONTRADICTIONS]
+    ]
 
 
 def _conflicts(entries: list[Entry], by_id: dict[str, Entry]) -> list[dict]:

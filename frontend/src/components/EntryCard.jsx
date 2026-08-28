@@ -25,6 +25,7 @@ import {
   Button,
   Chip,
   ConfidenceChip,
+  RiskFloorChip,
   RiskChip,
   SpanText,
   readSelectionRange,
@@ -160,7 +161,10 @@ export default function EntryCard({
           {entry.author_name || entry.author_id}
         </span>
         <RiskChip level={entry.risk_level} />
-        {isAi && <ConfidenceChip confidence={entry.ai_confidence} />}
+        <RiskFloorChip applied={entry.risk_floor_applied} />
+        {isAi && (
+          <ConfidenceChip confidence={entry.ai_confidence} band={entry.ai_confidence_band} />
+        )}
         {entry.conflict_flagged && (
           <Chip tone="alert" title="A clinician has recorded a correction to this entry">
             Disputed — see correction

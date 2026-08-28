@@ -6,11 +6,12 @@
           closed if anything identifying survives)
         → structured summary
         → Entry(author_role=system, type=ai_*_summary)
-          + AIScribedNote(session_id, model, confidence, redaction_count)
+          + AIScribedNote(session_id, model, derived confidence, risk floor,
+            redaction_count)
           + TranscriptSegment rows
         → highlight generation
 
-Three design points worth stating, because each is a place this could have been
+Four design points worth stating, because each is a place this could have been
 done more simply and less honestly.
 
 **Redaction is applied twice, on purpose.** Segments are redacted before storage
@@ -30,10 +31,21 @@ it means a reviewer with no key sees the real product rather than
 (DECISIONS.md D-031).
 
 **Confidence is derived, not asserted.** A model that self-rates gets to report
-its own number. The offline path computes one from hedging density in the source
+its own number. Confidence here is computed from hedging density in the source
 transcript — a session where the patient said "maybe", "I think" and "not sure"
-throughout produces a summary the UI marks as lower confidence, which is exactly
-the calibration signal the brief is asking for.
+throughout produces a summary the UI marks as lower confidence. This runs on
+**both** paths: a live model's self-reported number is recorded for comparison
+but is not what the clinician sees, because a model's opinion of its own
+reliability is not evidence about it (D-065).
+
+**The model cannot lower a risk level, only raise it.** `_infer_risk()` computes
+a deterministic floor from the transcript — explicit high-risk terms and tagged
+clinical entities — and the stored `risk_level` is the *higher* of that floor
+and whatever the model proposed. Model-assigned ordinals inflate and drift
+between runs, and the direction that matters is the one where drift is
+dangerous: a model quietly downgrading a transcript containing "chest pain" to
+`low` must not be able to move the badge. Raising is allowed because a model may
+legitimately notice something the keyword tables do not (D-066).
 """
 
 from __future__ import annotations
@@ -54,6 +66,7 @@ from app.core.enums import EntryType, InteractionType, RiskLevel, Role
 from app.core.provenance import session_pointer
 from app.core.sanitization import prepare_content
 from app.models import AIScribedNote, AuditLog, Entry, Patient, TranscriptSegment, User, Version
+from app.security import policy
 from app.services import attribution, features, highlights, transcripts
 from app.services.transcripts import Turn
 
@@ -62,6 +75,11 @@ SUMMARY_TYPE: dict[InteractionType, EntryType] = {
     InteractionType.NURSE_PATIENT_CONSULT: EntryType.AI_NURSE_CONSULT_SUMMARY,
     InteractionType.AI_PATIENT_SESSION: EntryType.AI_PATIENT_SESSION_SUMMARY,
 }
+
+# Enforced at import time: if anyone ever adds a patient-facing type to the map
+# above, the module fails to load rather than shipping model output to a
+# patient. See policy.assert_never_patient_facing and DECISIONS.md D-067.
+policy.assert_never_patient_facing(SUMMARY_TYPE.values())
 
 SUMMARY_TITLE: dict[InteractionType, str] = {
     InteractionType.DOCTOR_PATIENT_CONSULT: "Doctor consult summary (AI-scribed)",
@@ -186,16 +204,16 @@ def _extractive_summary(redacted_transcript: str, interaction_type: InteractionT
         InteractionType.AI_PATIENT_SESSION: "Pre-consult patient session: concerns captured.",
     }[interaction_type]
 
-    hedging = features.uncertainty_ratio(redacted_transcript)
-    confidence = max(0.35, min(0.9, 0.88 - 0.9 * hedging))
-
+    # No confidence here. It is derived once, from the transcript, by
+    # `derived_confidence()` on both paths — a second copy of the formula in
+    # this function is exactly the drift the single-definition rule exists to
+    # prevent.
     return {
         "headline": headline,
         "key_points": key_points,
         "open_actions": open_actions,
         "patient_reported": patient_reported,
         "risk_level": _infer_risk(redacted_transcript),
-        "confidence": round(confidence, 2),
     }
 
 
@@ -310,16 +328,28 @@ def run_scribe(
     if parsed and parsed.get("headline"):
         summary = parsed
         model_used = f"{response.provider}:{response.model}"
-        confidence = _clamp_confidence(parsed.get("confidence"), response.confidence)
+        model_self_reported = _clamp_confidence(parsed.get("confidence"), None, default=None)
     else:
         # No live model, or the model did not return usable JSON. Same code
         # path, deterministic summariser, and the model field says so.
         summary = _extractive_summary(redacted_transcript, interaction_type)
         model_used = "offline-extractive-v1"
-        confidence = _clamp_confidence(summary.get("confidence"), 0.6)
+        model_self_reported = None
+
+    # Confidence is measured from the source, on both paths. A live model's own
+    # number is kept for comparison but is never what the clinician sees.
+    confidence = derived_confidence(redacted_transcript)
 
     content, markers = prepare_content(_render_content(summary))
-    risk_level = _coerce_risk(summary.get("risk_level"))
+
+    # The model proposes a risk level; deterministic rules set the floor it
+    # cannot go below. `risk_floor_applied` records when the two disagreed, so
+    # "the badge says high because a rule said so, not because a model felt
+    # strongly" is answerable from the row rather than from this comment.
+    model_risk = _coerce_risk(summary.get("risk_level"))
+    floor = RiskLevel(_infer_risk(redacted_transcript))
+    risk_level = _max_risk(model_risk, floor)
+    risk_floor_applied = RISK_RANK[floor] > RISK_RANK[model_risk]
 
     # --- persist ---------------------------------------------------------
     entry = Entry(
@@ -363,6 +393,9 @@ def run_scribe(
             redaction_applied=True,
             redaction_count=redaction_count,
             confidence=confidence,
+            model_self_reported_confidence=model_self_reported,
+            risk_floor_applied=risk_floor_applied,
+            model_proposed_risk=str(model_risk),
         )
     )
     db.add(
@@ -407,6 +440,9 @@ def run_scribe(
             "redactions": redaction_count,
             "segments": len(turns),
             "confidence": confidence,
+            "confidence_band": confidence_band(confidence),
+            "risk_level": str(risk_level),
+            "risk_floor_applied": risk_floor_applied,
             "attributed_lines": len(links),
         },
     )
@@ -415,12 +451,76 @@ def run_scribe(
     return entry
 
 
-def _clamp_confidence(value, fallback: float | None) -> float:
+def _clamp_confidence(value, fallback: float | None, *, default: float | None = 0.5):
     try:
         number = float(value)
     except (TypeError, ValueError):
-        number = float(fallback if fallback is not None else 0.5)
+        if fallback is None:
+            return default
+        number = float(fallback)
     return round(max(0.0, min(1.0, number)), 2)
+
+
+# Confidence bands. These exist so that "medium" has a number behind it and the
+# number has a meaning behind it, rather than being a word the UI picked.
+#
+#   high    >= 0.75   little hedging in the source; the summary restates
+#                     things the transcript said plainly
+#   medium  0.60-0.75 some hedging; worth a glance at the source
+#   low     <  0.60   the source was substantially uncertain — the UI flags
+#                     this and tells the reader to verify against the source
+#
+# LOW_BAND is the same 0.60 the Glance View flags on (glance.LOW_CONFIDENCE_
+# THRESHOLD); the duplication is asserted equal by test rather than imported,
+# because the two modules should be free to disagree loudly rather than quietly.
+CONFIDENCE_HIGH_BAND = 0.75
+CONFIDENCE_LOW_BAND = 0.60
+
+# Bounds on the derived figure. Never 1.0: a summariser working from a
+# transcript it did not hear, through a recogniser that may have erred, has no
+# business claiming certainty. Never 0.0 either — a floor of 0.35 keeps the
+# number a comparison rather than a verdict.
+CONFIDENCE_CEILING = 0.90
+CONFIDENCE_FLOOR = 0.35
+
+
+def derived_confidence(redacted_transcript: str) -> float:
+    """Confidence measured from the source text, not reported by the model.
+
+    Hedging density is a weak proxy — it measures how certain the *speakers*
+    were, which correlates with but is not the same as how well the summary is
+    supported. It has one property self-reported confidence does not: it is
+    computed from something a reviewer can go and read. A number that can be
+    checked against the transcript is worth more than a better-calibrated one
+    that cannot (D-065).
+    """
+    hedging = features.uncertainty_ratio(redacted_transcript)
+    value = CONFIDENCE_CEILING - 0.02 - 0.9 * hedging
+    return round(max(CONFIDENCE_FLOOR, min(CONFIDENCE_CEILING, value)), 2)
+
+
+def confidence_band(value: float | None) -> str:
+    """The word for a number. One definition, so the UI cannot invent another."""
+    if value is None:
+        return "unknown"
+    if value >= CONFIDENCE_HIGH_BAND:
+        return "high"
+    if value >= CONFIDENCE_LOW_BAND:
+        return "medium"
+    return "low"
+
+
+RISK_RANK: dict[RiskLevel, int] = {
+    RiskLevel.NONE: 0,
+    RiskLevel.LOW: 1,
+    RiskLevel.MEDIUM: 2,
+    RiskLevel.HIGH: 3,
+    RiskLevel.CRITICAL: 4,
+}
+
+
+def _max_risk(*levels: RiskLevel) -> RiskLevel:
+    return max(levels, key=lambda level: RISK_RANK[level])
 
 
 def _coerce_risk(value) -> RiskLevel:

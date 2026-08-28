@@ -54,13 +54,17 @@ export function RiskChip({ level }) {
   )
 }
 
-export function ConfidenceChip({ confidence }) {
+export function ConfidenceChip({ confidence, band }) {
   if (confidence === null || confidence === undefined) return null
   const percent = Math.round(confidence * 100)
-  const low = confidence < 0.6
+  const label = band || (confidence >= 0.75 ? 'high' : confidence >= 0.6 ? 'medium' : 'low')
+  const low = label === 'low'
   return (
     <span
-      title="How clearly the source transcript supported this summary"
+      title={
+        'Measured from hedging in the source transcript, not reported by the model. ' +
+        'high >=75%, medium 60-75%, low <60%.'
+      }
       className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ${
         low
           ? 'bg-orange-50 text-orange-900 ring-orange-300'
@@ -68,7 +72,26 @@ export function ConfidenceChip({ confidence }) {
       }`}
     >
       <span aria-hidden="true">{low ? '◐' : '●'}</span>
-      AI confidence {percent}%{low ? ' — verify' : ''}
+      AI confidence {label} ({percent}%){low ? ' — verify' : ''}
+    </span>
+  )
+}
+
+/**
+ * Shown when deterministic rules raised a risk level above what the model asked
+ * for. A clinician asking "why does this say high?" should be able to tell
+ * "because a rule matched words in the transcript" from "because a model felt
+ * strongly" without opening anything.
+ */
+export function RiskFloorChip({ applied }) {
+  if (!applied) return null
+  return (
+    <span
+      title="A deterministic rule matched the source transcript and raised this level. The model proposed a lower one."
+      className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 ring-1 ring-slate-300"
+    >
+      <span aria-hidden="true">▲</span>
+      Risk set by rule
     </span>
   )
 }
