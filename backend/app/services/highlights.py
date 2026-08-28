@@ -45,6 +45,60 @@ MIN_SUGGESTION_SCORE = 0.12
 # places is what made hand-marked spans silently fall off the Glance View.
 MANUAL_HIGHLIGHT_BONUS = 0.5
 
+# --------------------------------------------------------------------------
+# Exposure bias
+# --------------------------------------------------------------------------
+#
+# The learning loop only ever sees feedback on spans it chose to surface. A tag
+# that scores just below the cut is never shown, so it is never accepted, so it
+# never gains weight, so it is never shown — the ranking converges on whatever
+# it happened to favour early and cannot discover that it was wrong. This is a
+# structural property of learning from your own output, not a tuning problem.
+#
+# The mitigation is deliberately small: **one of the slots per entry is reserved
+# for a candidate carrying a tag the clinic has never given feedback on**, when
+# such a candidate exists and clears the minimum score. It is not randomised —
+# an epsilon-greedy coin flip would make the Glance View non-deterministic
+# between loads, which for a clinical surface is a worse property than the bias
+# it fixes. Deterministic on (entry content, feedback history) means the same
+# chart shows the same card, and the exploration slot resolves the moment the
+# clinic gives feedback on that tag once.
+#
+# It is bounded by the same MIN_SUGGESTION_SCORE floor as everything else, so
+# exploration can promote an under-explored candidate over a marginally better
+# known one — it can never surface something the rules found clinically
+# meaningless. See DECISIONS.md D-069.
+EXPLORATION_SLOTS = 1
+
+
+def _keep_with_exploration(
+    candidates: list[tuple[float, dict]], existing: list[Highlight]
+) -> list[tuple[float, dict]]:
+    """Top-scoring candidates, with one slot held for an unexposed tag."""
+    if len(candidates) <= MAX_SUGGESTIONS_PER_ENTRY:
+        return candidates
+
+    top = candidates[: MAX_SUGGESTIONS_PER_ENTRY]
+    if EXPLORATION_SLOTS <= 0:
+        return top
+
+    # Tags that have already been surfaced on this entry — those have had their
+    # chance at feedback, whatever came of it.
+    exposed: set[str] = set()
+    for row in existing:
+        exposed.update(decode_tags(row.feature_tags))
+    for _, spec in top:
+        exposed.update(spec["tags"])
+
+    for score, spec in candidates[MAX_SUGGESTIONS_PER_ENTRY:]:
+        if not spec["tags"]:
+            continue
+        if any(tag in exposed for tag in spec["tags"]):
+            continue
+        # Displace the weakest of the top, not the strongest.
+        return top[: MAX_SUGGESTIONS_PER_ENTRY - EXPLORATION_SLOTS] + [(score, spec)]
+    return top
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -125,7 +179,7 @@ def refresh_entry_highlights(db: Session, entry: Entry) -> list[Highlight]:
         )
 
     candidates.sort(key=lambda pair: pair[0], reverse=True)
-    keep = candidates[:MAX_SUGGESTIONS_PER_ENTRY]
+    keep = _keep_with_exploration(candidates, existing)
 
     # Suggestions are UPDATED IN PLACE where the same span comes back, not
     # deleted and re-created. A highlight's id is what the Glance View hands to
