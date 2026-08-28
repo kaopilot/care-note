@@ -112,10 +112,10 @@ if any check fails.
 ## Running tests
 
 ```bash
-pytest tests/ -v                  # from the repository root — 385 tests
+pytest tests/ -v                  # from the repository root — 400 tests
 ```
 
-385 tests, all passing, no API key or network required. Roughly 31 seconds.
+400 tests, all passing, no API key or network required. Roughly 34 seconds.
 
 To run just the four files the brief names:
 
@@ -137,7 +137,13 @@ pytest tests/ -v -k phase2        # the Phase 2 product-surface tests
 pytest tests/ -v -k cross_clinic  # cross-tenancy refusals only
 pytest tests/test_self_learning_importance.py tests/test_data_decay.py -v  # Phase 4 bonuses
 pytest tests/test_voice_capture.py -v -k provenance   # segment-level provenance only
+pytest tests/test_phase7_reported_bugs.py -v         # regressions for the Phase 7 defects
 ```
+
+`test_phase7_reported_bugs.py` is worth running on its own if you are reviewing
+the fixes described in `DECISIONS.md` D-059 through D-062. Ten of its fifteen
+tests fail against the Phase 6 code, which is the point of them: they pin
+defects rather than describe current behaviour.
 
 ⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
 fixture to prove that no prompt text reaches the logs; disabling the logging
@@ -482,6 +488,28 @@ README exists not to do.
 - **Whether any of this actually helps is unmeasured.** Whether promoted content
   shortens a clinician's time-to-decision is the outcome the feature exists for
   and cannot be measured from inside the system. It needs instrumented users.
+- **UTC offsets on the wire are enforced by convention, not by types.** Every
+  response datetime goes through `UtcDateTime` / `iso_utc` (D-061), and four
+  regression tests walk the actual payloads — but a new endpoint that writes
+  `created_at: datetime` reintroduces the bug silently until someone adds it to
+  the sweep. The columns are still naive `DateTime` because SQLite has nowhere
+  to put an offset.
+- **The what's-new session cap is a guess.** `MAX_MARKER_AGE` is four hours
+  (D-060), chosen as roughly one clinic session and validated against nothing.
+  It should be set from how these charts are actually used.
+- **There is no frontend test harness.** Every fix in the client — the task
+  controls, the selection-offset handling, the cleared optimistic state — is
+  covered at the API layer or not at all. No component renders in CI.
+- **Staff are told about corrections they cannot read.** A clinician correction
+  is written as a `clinician_section`, which staff may not view under D-004, but
+  the disputed original still shows them a "Correction on record" row that leads
+  nowhere they are allowed. A consequence of the least-privilege default, left
+  as a documented dead end rather than resolved — see the closing note in
+  DECISIONS.md D-062's section.
+- **`PATCH /entries/{id}` clears the title when `title` is omitted.** Our own UI
+  always sends it, so this is invisible in the app and live for any other
+  client. Deliberately not fixed in the Phase 7 pass: it changes the meaning of
+  an existing request shape.
 
 ### Accessibility posture
 

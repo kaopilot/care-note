@@ -1331,3 +1331,220 @@ Phase 5 capture fixtures actually contain.
   `test_known_false_positive_is_documented_not_denied` so it is a recorded
   property rather than a surprise. Same failure direction: less precise, never
   silently hiding.
+
+---
+
+## Phase 7 — Reported defects (2026-08-28)
+
+Four bugs reported against the Phase 6 build, plus three found while
+reproducing them. Every one survived a green 385-test suite, and they have a
+shape in common: each lives in the seam between two pieces of individually
+correct code. The manual-highlight bonus is right where it is written and right
+where it is recomputed — it is the ordering of the two that is wrong. The
+timestamps are right in the database and right in the browser; only the contract
+between them was unstated. Tests that exercise one component at a time cannot
+see any of this, which is why the regressions in
+`tests/test_phase7_reported_bugs.py` are written as end-to-end sequences —
+open the chart, write a note, reload — rather than as unit assertions.
+
+### D-059 · A suggestion's id is stable across regeneration (defect found in Phase 7)
+
+`refresh_entry_highlights` deleted every `SUGGESTED` row and re-created the
+survivors with fresh uuids. That function runs on **every write to the chart**:
+entry create, edit, revert, supersede, task create, task status change, comment
+resolve, voice capture, and each highlight accept or reject.
+
+A highlight's id is what the Glance View hands back to `POST
+/highlights/{id}/accept`. So the card a clinician was looking at held ids the
+server had already deleted. Confirming one suggestion regenerated the other
+five, and every subsequent Confirm returned `404 Highlight not found`:
+
+```
+suggested on card: 6
+accept first -> 200
+  accept next -> 404 Highlight not found     (x5)
+```
+
+The single-click-then-reload flow in `GlanceView.decide` masked it, because the
+reload fetched fresh ids before the next click. It surfaced the moment anything
+made the open card stale — two quick confirmations, a colleague adding a note,
+the scribe finishing.
+
+**Suggestions are now updated in place, keyed on `(span_start, span_end)`.** The
+same words are the same claim, so the same row carries them; only spans that
+stop being candidates are deleted. Ids survive regeneration, and an accept
+issued against a card a few seconds old still resolves.
+
+Keying on the span rather than on a content hash is deliberate. A span whose
+text changed under it is still the same claim about the same place in the note
+— that is what `source_version_number` and the `stale` flag already exist to
+say. Re-minting the id there would throw away a clinician's in-flight decision
+to signal something the UI already signals.
+
+**What is still wrong with it:** editing an entry genuinely does move its spans,
+so suggestions on the *edited* entry still get new ids. That is correct — the
+offsets no longer mean the same thing — but it means "your open card keeps
+working" holds for every entry except the one you just changed.
+`test_unrelated_writes_do_not_renumber_open_suggestions` pins exactly that
+boundary rather than pretending it is absolute.
+
+### D-060 · The what's-new marker is seeded on first view and capped in age (defect found in Phase 7)
+
+Two defects in `glance.touch_view`, both reported as "since your last visit
+doesn't update", and both affecting clinician, staff and admin identically.
+
+**First, the marker was NULL for a whole session.** The first view stored
+`previous_viewed_at = None` and returned `None`, which is right — captioning an
+entire chart as new on the one view that most needs to be readable is noise.
+But it left nothing for the *next* load to compare against, and that load
+returned `None` too, and so did the one after. A clinician could open a chart,
+write a note, reload, and be told this was their first look with nothing new:
+
+```
+1st open                            first_visit=True  since=None  new=0
+reload right after writing a note   first_visit=True  since=None  new=0
+reload again                        first_visit=True  since=None  new=0
+```
+
+`previous_viewed_at` is now seeded to `now` on insert. The function still
+returns `None` on the genuine first view — that behaviour was never the bug —
+but the second load of a session compares against the moment the session
+started.
+
+**Second, the marker never rolled forward for an active user.** It only advanced
+when the gap between two *consecutive page loads* exceeded `VIEW_SESSION_GAP`
+(20 minutes). Someone with the chart open, refreshing through a shift, never
+opened such a gap, so the window only ever widened and "new since your last
+visit" quietly became "new since this morning".
+
+`MAX_MARKER_AGE` (4 hours) now caps how stale the comparison point may get: past
+it the marker advances on the next load even mid-session. Roughly one clinic
+session — long enough not to interrupt a working one, short enough that the
+label on the section stays true.
+
+**The trade-off, stated plainly:** four hours is a guess. It is a named constant
+rather than an inline literal precisely because it is the kind of number that
+should be argued with, and ideally set from how these charts are actually used
+rather than from how we imagine they are. D-033's guarantee — that reading the
+what's-new group does not destroy it — is unchanged and is pinned by
+`test_the_marker_holds_still_across_a_rapid_refresh`, so a future adjustment to
+the cap cannot silently reintroduce the refresh-eats-the-news bug.
+
+### D-061 · Every timestamp leaves the API with an explicit UTC offset (defect found in Phase 7)
+
+Every datetime here is UTC. SQLite's `DATETIME` column has no timezone, so
+SQLAlchemy returns naive datetimes, and Pydantic serialises a naive datetime
+with no offset at all. The API was emitting two different things side by side:
+
+```
+glance.generated_at    : 2026-08-28T00:52:43.329852+00:00
+glance.since           : 2026-08-27T23:22:42.518090+00:00
+entry.timestamp        : 2026-08-28T00:52:42.767309          <- no offset
+highlight.entry_ts     : 2026-08-27T00:52:41.484561          <- no offset
+open_action.created_at : 2026-08-25T00:52:41.493042          <- no offset
+```
+
+ISO 8601 says a date-time with no designator is **local time**, and browsers
+follow it. Verified with `TZ=Asia/Singapore` — the timezone this build was
+written in and demoed from:
+
+```
+naive parsed as: 2026-08-27T16:52:42.767Z -> age 8.00h
+aware parsed as: 2026-08-28T00:52:42.767Z -> age 0.00h
+```
+
+A note written seconds ago rendered as **"8h ago"**. West of UTC the arithmetic
+went negative and `relativeAge` returned "just now" for everything inside the
+offset. Date group headings in the timeline landed on the wrong day. And it was
+*inconsistent*: `since` was built from an already-aware value and converted
+correctly, so the "since 08:52" hint sat directly above entry ages measured in a
+different frame — which is worse than being uniformly wrong, because it looks
+like the data disagrees with itself.
+
+`app/core/timeutil.py` now holds the single answer. `as_utc` labels a naive
+value as UTC (it is never anything else here); `UtcDateTime` applies it as a
+Pydantic `BeforeValidator` on every response-model datetime field; `iso_utc`
+does the same for the hand-built dicts in `services/glance.py`, which returns
+plain dicts and so cannot use the annotation.
+
+**Nothing about storage changed.** Migrating the columns to
+`DateTime(timezone=True)` would be the deeper fix, but SQLite has nowhere to put
+the offset, so it would change the declaration without changing the behaviour —
+a fix that reads better than it works. The contract at the boundary is where the
+ambiguity actually was, so that is where it is resolved.
+
+**What is still wrong with it:** this is enforced by convention plus a
+regression test, not by the type system. A new response model that writes
+`created_at: datetime` will silently reintroduce the bug.
+`test_glance_timestamps_are_all_offset_qualified` and its three siblings walk
+the actual payloads rather than the annotations, so a new *field on an existing
+surface* is caught; an entirely new endpoint is not, until someone adds it to
+the sweep.
+
+### D-062 · Tasks can be closed from the Glance View (defect found in Phase 7)
+
+`POST /tasks/{task_id}/status` has existed since Phase 2.5 and works. `Api.
+setTaskStatus` has existed in the client since the same phase. **Nothing ever
+called it**, and `Api.tasks` was never fetched either — so a task could be
+raised from a comment thread and never finished. "Open actions" only grew.
+
+This was not only a missing button. `services/scoring.action_score` reads the
+open-task count, so an action nobody could close kept its entry's highlights
+pinned to the top of the card indefinitely, and `refresh_patient_highlights`
+faithfully recomputed that wrong answer on every write. A stuck task quietly
+distorted the ranking it was supposed to inform.
+
+Mark done / Cancel are now inline on task rows, single-click, no navigation —
+the same interaction cost as accept/reject, and for the same reason set out in
+Phase 2.4: an affordance with friction on it does not get used, and an
+outstanding item nobody ticks off stops meaning anything.
+
+Cancelled tasks are set to `cancelled` rather than deleted, consistent with how
+rejected highlights are kept (see the module docstring in
+`routes/highlight_routes.py`). The `AuditLog` row records who closed what and
+when.
+
+**Scope note:** the fix is a UI wiring, so it is covered by API-level tests
+(`test_closing_a_task_removes_it_from_open_actions`,
+`test_staff_can_close_a_task_assigned_to_them`) and by nothing that exercises
+the button itself. There is no frontend test harness in this build — recorded
+here as a known gap rather than papered over.
+
+### Also fixed in this pass, not warranting their own decision
+
+* **`Primitives.readSelectionRange` mishandled element-node selection
+  boundaries.** A browser reports a selection anchored on an element with an
+  offset that is a *child index*, not a character offset. Triple-clicking a
+  paragraph, or dragging past the last character, produced a small number that
+  was read as a character position, so the highlight landed a few characters
+  into the entry instead of on the selected words. Element boundaries are now
+  resolved to the character offset before that child, or to the end of the last
+  child when the index is one past the end.
+
+* **`GlanceView`'s optimistic `decided` map survived the reload.** Keyed by
+  highlight id and never cleared, it left a "Confirmed" pill attached to an id
+  the server had already answered for. Cleared on each new payload; the server
+  is the single source of truth for a decision.
+
+* **`whats_new.count` could exceed the list under it.** `MAX_WHATS_NEW` caps the
+  entries but `count` is the true total, so the card could say 12 and show 8.
+  Now says "and N more in the timeline below" rather than silently disagreeing
+  with itself.
+
+### Considered and deliberately not fixed
+
+* **`PATCH /entries/{id}` clears the title when `title` is omitted.** The field
+  defaults to `None` and `_append_version` writes it through, so a content-only
+  edit from any client that is not our own UI silently drops the title. The fix
+  is a `model_fields_set` check, but it changes the meaning of an existing
+  request shape — "absent" would stop meaning "null" — and that deserves its own
+  decision and its own test rather than being folded into a bug-fix pass.
+
+* **Staff are told a clinician correction exists that they cannot read.**
+  `supersede_entry` writes the correction as `CLINICIAN_SECTION`, which staff
+  may not view under D-004. Staff see the original chipped "Disputed — see
+  correction" and a "Correction on record" row on the Glance View, and clicking
+  either goes nowhere they are allowed. This is a real consequence of the
+  least-privilege default, not an accident — but it is currently an undocumented
+  dead end. Resolving it means either widening D-004 or suppressing the chip for
+  staff, and both are policy changes, not fixes.
