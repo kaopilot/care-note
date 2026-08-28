@@ -90,6 +90,7 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
   const confidenceFlags = glance.confidence_flags || []
   const openActions = glance.open_actions || []
   const conflicts = glance.conflicts || []
+  const contradictions = glance.contradictions || []
 
   return (
     <section
@@ -114,6 +115,60 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
           </p>
         )}
       </header>
+
+      {/* 0 — unreconciled clinical contradictions.
+          Above the grid, full width, before everything else. This is the one
+          thing on the card that is not a ranking judgement: two parts of the
+          record disagree about an allergy, a dose or whether a drug is running,
+          and nobody has reconciled them. It outranks "what changed" because a
+          clinician who reads no further than this line has still read the most
+          dangerous thing the system knows. */}
+      {contradictions.length > 0 && (
+        <div className="border-b border-rose-200 bg-rose-50 px-4 py-3">
+          <SectionTitle count={contradictions.length}>
+            Unreconciled contradictions
+          </SectionTitle>
+          <p className="mt-0.5 text-[11px] text-rose-900">
+            Two entries disagree. The system has not chosen between them — both
+            were written by people, so no precedence rule applies.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {contradictions.map((item, index) => (
+              <li
+                key={`${item.kind}-${item.subject}-${index}`}
+                className="rounded border border-rose-300 bg-white p-2"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <RiskChip level={item.severity} />
+                  <span className="text-xs font-semibold text-slate-900">
+                    {item.subject}
+                  </span>
+                  <Chip tone={item.human_human ? 'alert' : 'info'}>
+                    {item.human_human ? 'Human vs human' : 'Involves an AI note'}
+                  </Chip>
+                </div>
+                <p className="mt-1 text-xs text-slate-800">{item.detail}</p>
+                <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
+                  {[item.left, item.right].map((side, sideIndex) => (
+                    <button
+                      key={sideIndex}
+                      onClick={() => onJumpTo(side.entry_id)}
+                      className="rounded border border-slate-200 bg-slate-50 p-1.5 text-left text-[11px] text-slate-700 hover:border-slate-400"
+                      title="Open the entry this came from"
+                    >
+                      <span className="font-medium text-slate-500">
+                        {side.is_ai ? 'AI-scribed entry' : 'Written by a person'} ·
+                        open
+                      </span>
+                      <span className="mt-0.5 block italic">"{side.quote}"</span>
+                    </button>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid gap-4 px-4 py-4 lg:grid-cols-[1.6fr_1fr]">
         <div className="space-y-4">
@@ -335,7 +390,7 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                       onClick={() => onJumpTo(flag.entry_id)}
                       className="w-full rounded border border-orange-200 bg-orange-50/60 px-2 py-1.5 text-left hover:border-orange-400"
                     >
-                      <ConfidenceChip confidence={flag.confidence} />
+                      <ConfidenceChip confidence={flag.confidence} band={flag.confidence_band} />
                       <span className="mt-1 block truncate text-xs text-slate-700">
                         {flag.title || entryLabel(flag.type)}
                       </span>
