@@ -55,6 +55,13 @@ tailwindcss          3.4.19   MIT   Utility CSS
 postcss              8.5.26   MIT   CSS transform pipeline (Tailwind dependency)
 autoprefixer         10.5.4   MIT   Vendor prefixing
 
+Frontend test harness (devDependencies, not shipped in the bundle):
+vitest                     2.1.9    MIT   Component test runner
+jsdom                      25.0.1   MIT   DOM implementation for the test env
+@testing-library/react     16.3.3   MIT   Render/query helpers for components
+@testing-library/dom       10.4.1   MIT   Query engine (testing-library core)
+@testing-library/user-event 14.6.6  MIT   Realistic interaction simulation
+
 Transitive dependencies are resolved by npm and recorded in
 frontend/package-lock.json. The direct dependencies above are all MIT.
 

@@ -145,6 +145,32 @@ the fixes described in `DECISIONS.md` D-059 through D-062. Ten of its fifteen
 tests fail against the Phase 6 code, which is the point of them: they pin
 defects rather than describe current behaviour.
 
+### Frontend component tests
+
+```bash
+cd frontend
+npm install
+npm test                          # vitest run — 25 tests, ~3 seconds
+npm run test:watch                # while working on a component
+```
+
+jsdom, not a real browser: what these cover is offset arithmetic and conditional
+rendering, neither of which needs a compositor. Two files:
+
+- `src/components/Primitives.selection.test.jsx` — `readSelectionRange`, the
+  pure DOM arithmetic behind manual highlighting. Selections are built as
+  explicit `Range` objects rather than by simulating a drag, because jsdom does
+  not lay text out — but a `Range` is what the browser hands the real code
+  anyway. Four of these twelve fail against the Phase 6 implementation.
+- `src/components/GlanceView.test.jsx` — the task controls, the accept/reject
+  flow and the what's-new count. `Api` is mocked; what is under test is the
+  component's contract with the client wrapper, not the wrapper's contract with
+  the server, which `tests/` already covers end to end. Six of these thirteen
+  fail against the Phase 6 component.
+
+The suites are independent: `pytest` needs no npm install, `vitest` needs no
+running backend.
+
 ⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
 fixture to prove that no prompt text reaches the logs; disabling the logging
 plugin errors that test rather than skipping it.
@@ -497,9 +523,12 @@ README exists not to do.
 - **The what's-new session cap is a guess.** `MAX_MARKER_AGE` is four hours
   (D-060), chosen as roughly one clinic session and validated against nothing.
   It should be set from how these charts are actually used.
-- **There is no frontend test harness.** Every fix in the client — the task
-  controls, the selection-offset handling, the cleared optimistic state — is
-  covered at the API layer or not at all. No component renders in CI.
+- **Frontend test coverage is narrow.** A vitest harness now covers
+  `readSelectionRange` and the Glance View's action controls (25 tests), which
+  are the pieces that fail silently. `EntryCard`, `Comments`, `Timeline`,
+  `VersionHistory`, `VoiceCapture` and `PatientHome` have no component tests,
+  and nothing exercises the real `fetch` path — `Api` is mocked. There is no
+  end-to-end browser test of any kind.
 - **Staff are told about corrections they cannot read.** A clinician correction
   is written as a `clinician_section`, which staff may not view under D-004, but
   the disputed original still shows them a "Correction on record" row that leads

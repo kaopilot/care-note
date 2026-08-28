@@ -1548,3 +1548,49 @@ here as a known gap rather than papered over.
   least-privilege default, not an accident — but it is currently an undocumented
   dead end. Resolving it means either widening D-004 or suppressing the chip for
   staff, and both are policy changes, not fixes.
+
+### D-063 · A frontend test harness, scoped to what fails silently
+
+Recorded as a known gap in the Phase 7 pass and closed immediately afterwards,
+because the gap had a specific shape: three client fixes shipped with no test
+that could see them, and one of the three — `readSelectionRange` — fails in the
+worst possible way. It does not throw. It creates the highlight successfully, at
+the wrong offsets, and mints a `provenance_pointer` at words nobody selected. In
+a system whose entire argument is that every claim traces back to its source, a
+citation that lands a few characters off is a worse failure than a crash,
+because nothing about it looks wrong.
+
+**vitest with jsdom, not a real browser.** What these tests cover is offset
+arithmetic and conditional rendering, and neither needs a compositor. The one
+thing jsdom genuinely cannot do is lay text out, so selections are built as
+explicit `Range` objects rather than by simulating a drag — which is not a
+workaround so much as the honest version of the same test: a `Range` is exactly
+what `window.getSelection()` hands the real code, with the node and offset pair
+stated rather than inferred from geometry.
+
+**`Api` is mocked in the component tests.** What is under test is the
+component's contract with the client wrapper — that Mark done sends `done` for
+the right task id, that a decision triggers a reload — not the wrapper's
+contract with the server. That second contract is already covered end to end,
+against the real app and a real database, by `tests/`. Testing it twice in a
+weaker environment would add confidence in proportion to nothing.
+
+**Verified against the defects, not just against itself.** Ten of the 25 fail
+when the two components are reverted to their Phase 6 state (4 of 12 in the
+selection suite, 6 of 13 in the Glance View suite), checked by `git show`-ing
+the old files back in and re-running. A regression test that has never seen the
+regression is a description of current behaviour wearing a test's clothing.
+
+**Scope, deliberately narrow.** `EntryCard`, `Comments`, `Timeline`,
+`VersionHistory`, `VoiceCapture` and `PatientHome` have no component tests. The
+two files chosen are the ones where a defect is invisible rather than loud —
+everywhere else, a break shows up as a blank panel or a console error the first
+time anyone opens the page. Writing thin tests across all nine components on the
+final day would have bought coverage percentage rather than confidence.
+
+**What is still wrong with it:** nothing exercises the real `fetch` path, so a
+change to `lib/api.js` — a wrong URL, a dropped `credentials: 'include'` — is
+caught by neither suite. There is no end-to-end browser test. And the harness
+adds five devDependencies (recorded in `ATTRIBUTION.txt`) to a project that
+previously shipped a frontend with none, which is a real cost for a 72-hour
+build and is the reason it was deferred past Phase 6 in the first place.
