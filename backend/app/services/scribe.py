@@ -252,6 +252,50 @@ def _gazetteer(db: Session, patient: Patient) -> set[str]:
     return names
 
 
+class RegenerationRefused(RuntimeError):
+    """Regeneration would have destroyed something a human did.
+
+    The capability being protected is "AI regeneration that preserves
+    human-confirmed and completed state". The cheap reading of that is "keep
+    the accepted highlights", and highlights already survive because
+    regeneration reuses the entry id (D-059). The expensive reading, and the
+    one that matters, is that **a clinician's own words must never be replaced
+    by a model's second attempt.**
+
+    So regeneration refuses rather than merging when a human has edited the
+    summary. Merging would require deciding which sentences of a clinician's
+    edit to keep, and that is a clinical judgement the system has no standing
+    to make — the same rule that stops the contradiction detector picking a
+    winner between two humans (D-068).
+
+    Refusing is recoverable: the clinician can revert to the machine version
+    and regenerate, or copy their edit out first. Overwriting is not.
+    """
+
+    def __init__(self, message: str, *, session_id: str, reason: str) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+        self.reason = reason
+
+
+def _assert_no_human_edits(db: Session, entry: Entry) -> None:
+    """Refuse if any version of this entry was written by someone other than the model."""
+    human = (
+        db.query(Version)
+        .filter(Version.entry_id == entry.id, Version.edited_by_role != Role.SYSTEM)
+        .order_by(Version.version_number.desc())
+        .first()
+    )
+    if human is not None:
+        raise RegenerationRefused(
+            "A clinician has edited this summary. Regenerating would discard "
+            "their wording. Revert to the machine version first, or copy the "
+            "edit out before regenerating.",
+            session_id="",
+            reason="human_edited",
+        )
+
+
 def run_scribe(
     db: Session,
     *,
@@ -260,6 +304,7 @@ def run_scribe(
     turns: list[Turn] | None = None,
     actor_id: str = "system",
     session_id: str | None = None,
+    regenerate: bool = False,
 ) -> Entry:
     """Run one transcript through the pipeline and append the result.
 
@@ -282,6 +327,25 @@ def run_scribe(
     session_id = session_id or f"sess-{patient.id}-{uuid.uuid4().hex[:8]}"
     gazetteer = _gazetteer(db, patient)
 
+    # --- regeneration ----------------------------------------------------
+    # Re-running a session used to be undefined behaviour: a fresh session id
+    # produced a duplicate summary entry, and passing the same one crashed on
+    # the transcript_segments unique constraint. Neither is an answer to "the
+    # model produced a poor summary, run it again" (D-078).
+    existing_note = (
+        db.query(AIScribedNote).filter(AIScribedNote.session_id == session_id).one_or_none()
+    )
+    existing_entry: Entry | None = None
+    if existing_note is not None:
+        if not regenerate:
+            raise RegenerationRefused(
+                "This session already has a summary. Pass regenerate=True to replace it.",
+                session_id=session_id,
+                reason="exists",
+            )
+        existing_entry = db.query(Entry).filter(Entry.id == existing_note.entry_id).one()
+        _assert_no_human_edits(db, existing_entry)
+
     # --- redact, then store segments already redacted --------------------
     redaction_count = 0
     redacted_lines: list[str] = []
@@ -294,6 +358,11 @@ def run_scribe(
         redacted_lines.append(f"{turn.speaker}: {result.text}")
         if features.is_unreadable(result.text, turn.language):
             unreadable_count += 1
+        if existing_entry is not None:
+            # Segments are immutable and already stored under this session id.
+            # The transcript is the source of truth; regeneration re-reads it,
+            # it does not re-record it.
+            continue
         db.add(
             TranscriptSegment(
                 session_id=session_id,
@@ -363,6 +432,60 @@ def run_scribe(
     risk_floor_applied = RISK_RANK[floor] > RISK_RANK[model_risk]
 
     # --- persist ---------------------------------------------------------
+    if existing_entry is not None:
+        # Regeneration. Reuse the entry, append a version. The entry id is what
+        # every accepted highlight, comment, task and provenance pointer is
+        # anchored to, so keeping it is what makes "preserves human-confirmed
+        # state" true rather than aspirational. Highlights anchored to the old
+        # version go stale and render side by side (D-076), which is exactly
+        # the right outcome: a clinician sees what they confirmed and what the
+        # model now says, and decides.
+        entry = existing_entry
+        next_version = entry.version_number + 1
+        entry.content = content
+        entry.risk_level = risk_level
+        entry.version_number = next_version
+
+        version = Version(
+            entry_id=entry.id,
+            version_number=next_version,
+            content_snapshot=content,
+            title_snapshot=entry.title,
+            risk_level_snapshot=str(risk_level),
+            edited_by="system",
+            edited_by_role=Role.SYSTEM,
+            change_summary=f"ai scribe regenerated ({model_used})",
+        )
+        db.add(version)
+        db.flush()
+        entry.current_version_id = version.id
+
+        existing_note.model_used = model_used
+        existing_note.confidence = confidence
+        existing_note.model_self_reported_confidence = model_self_reported
+        existing_note.risk_floor_applied = risk_floor_applied
+        existing_note.unreadable_segment_count = unreadable_count
+        existing_note.model_proposed_risk = str(model_risk)
+        existing_note.redaction_count = redaction_count
+
+        db.add(
+            AuditLog(
+                actor_id=actor_id,
+                actor_role=Role.SYSTEM,
+                clinic_id=patient.clinic_id,
+                action="entry.ai_scribe_regenerated",
+                target_type="entry",
+                target_id=entry.id,
+                audit_metadata=json.dumps(
+                    {"session_id": session_id, "version": next_version, "model": model_used}
+                ),
+            )
+        )
+        highlights.refresh_entry_highlights(db, entry)
+        db.commit()
+        db.refresh(entry)
+        return entry
+
     entry = Entry(
         patient_id=patient.id,
         clinic_id=patient.clinic_id,

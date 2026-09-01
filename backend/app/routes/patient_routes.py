@@ -36,6 +36,7 @@ from app.routes.schemas import EntryOut, entry_out
 from app.security import policy
 from app.security.rbac import AccessScope, require_access
 from app.services import features, highlights
+from app.services.dosage_gate import assert_dosages_confirmed
 from app.services.interactions import record_interaction
 
 router = APIRouter(tags=["patients"])
@@ -59,6 +60,10 @@ class EntryCreate(BaseModel):
     content: str = Field(min_length=1)
     title: str | None = Field(default=None, max_length=300)
     risk_level: RiskLevel = RiskLevel.NONE
+    # Set only after the author has been shown an implausible-dose warning and
+    # chosen to proceed. Defaults to False so the safe path is the default one
+    # rather than the one you have to remember (D-079).
+    dosage_confirmed: bool = False
 
 
 def _to_out(entry: Entry) -> EntryOut:
@@ -282,6 +287,15 @@ def create_entry(
         ) from exc
     title, title_markers = prepare_content(payload.title) if payload.title else ("", [])
 
+    # Patient-facing text is a higher severity class. An order-of-magnitude dose
+    # has to be acknowledged by the person writing it before it reaches a
+    # patient (D-079).
+    dosage_overrides = assert_dosages_confirmed(
+        entry_type=payload.type,
+        content=content,
+        confirmed=payload.dosage_confirmed,
+    )
+
     entry = Entry(
         patient_id=patient.id,
         clinic_id=scope.clinic_id,  # from the token, not the body
@@ -331,6 +345,9 @@ def create_entry(
                     "version": 1,
                     "content_length": len(content),
                     "injection_markers": markers + title_markers,
+                    # Which dose was overridden, not merely that one was. A
+                    # gate nobody can see the far side of is not a gate.
+                    "dosage_overrides": dosage_overrides,
                 }
             ),
         )

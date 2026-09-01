@@ -2181,3 +2181,91 @@ the request completes and its result is discarded. Correct behaviour for a
 clinician standing in a room, wasteful under load. A real fix needs the scribe to
 be a job that can be cancelled, which is the same work as making it retryable
 after a crash (D-032).
+
+### D-078 · Regeneration reuses the entry, and refuses to overwrite a person
+
+Capability: *"AI regeneration that preserves human-confirmed and completed
+state."* Before this it was undefined behaviour, found by probing rather than
+reading: a fresh session id produced a **duplicate** summary entry for one
+consult, and passing the same session id **crashed** on the
+`transcript_segments (session_id, sequence)` unique constraint. Neither is an
+answer to "the model produced a poor summary, run it again."
+
+**Regeneration reuses the entry and appends a version.** The entry id is what
+every accepted highlight, comment, task and provenance pointer anchors to, so
+keeping it is what makes the capability true rather than aspirational. The
+previous summary survives as a version, so it stays revertible. Transcript
+segments are not re-recorded: the transcript is the source of truth and
+regeneration re-reads it.
+
+A useful consequence falls out of D-076 — highlights anchored to the old version
+go stale and render side by side, so a clinician sees what they confirmed next to
+what the model now says and decides. That is better than either silently
+re-anchoring or dropping them.
+
+**The expensive half.** Keeping accepted highlights is cheap and mostly fell out
+of D-059. The requirement that matters is that **a clinician's own words are
+never replaced by a model's second attempt.** So regeneration refuses outright
+when any version of the entry was written by a non-system role. Merging would
+mean deciding which of a clinician's sentences to keep, and that is a clinical
+judgement this system has no standing to make — the same rule that stops the
+contradiction detector picking a winner between two humans (D-068).
+
+Refusing is only acceptable because it is recoverable, and the message says how:
+revert to the machine version and regenerate, or copy the edit out first.
+Overwriting would not be recoverable. `409`, not `400` — nothing about the
+request is malformed; the record is in a state where honouring it would destroy
+something.
+
+**Known gaps.** Regeneration is all-or-nothing: there is no way to regenerate one
+section of a summary while keeping another. Completed tasks survive because they
+hang off the entry id, but nothing re-links a task to a section that no longer
+exists in the new text.
+
+### D-079 · Dosages are checked against a reference, and patient-facing ones need a human
+
+Capability: *"Medical terminology and dosage confirmation — should what was
+captured be confirmed through medical references and human confirmation?"* And
+the 48-hour hint: *"Patient facing generation is a higher severity class… what's
+sent to the patient needs more visible human approvals and/or rules."*
+
+The build extracted doses and compared them **against each other** (D-068), so it
+could tell that two entries disagreed about a metformin dose and could not tell
+that one of them said 5000mg. The realistic failure is not a wild hallucination —
+it is a decimal point.
+
+**A reference table, not a formulary.** Adult single-dose ranges for the
+medications already on the watchlist. It cannot say a dose is *correct*, only
+that it is outside a range where almost nothing legitimate lives. Paediatric,
+oncology and specialist regimens are out of scope by design, which is exactly why
+an out-of-range figure produces a question for a human rather than a block.
+
+**Three bands, and only one of them gates.** `plausible` · `unusual` ·
+`implausible`. Gating on `unusual` would put a confirmation dialog on ordinary
+prescribing, which is how a safety prompt becomes a reflex click — the same
+alert-fatigue argument as the learning floors (D-041).
+
+**The threshold was wrong on the first attempt and the fix is principled rather
+than tuned.** An order of magnitude let metformin 5000mg through as merely
+`unusual`, which is the precise case the hint describes. The ranges are
+*single-dose*, and a legitimate daily total reaches roughly 3× a single dose
+(TDS), so beyond 3× the upper bound exceeds any plausible daily total let alone
+one administration. Metformin 1500mg BD stays `unusual`; 5000mg becomes
+`implausible`.
+
+**Acknowledgement, not refusal.** A hard block would be wrong — a clinician who
+knows what they are doing must not be prevented from recording it, and refusal
+teaches people to route around the check. The gate makes them say explicitly, in
+the audit trail, that they meant it. What was overridden is recorded, not merely
+that something was: a gate nobody can see the far side of is not a gate.
+
+**Only patient-facing types are gated.** Internal notes get audited by people who
+can read a BNF. This is for what leaves the building. It pairs with D-067 — no
+machine-written text can be patient-facing at all, so the gate is catching a
+human's typo, which is the residual risk that structural control deliberately
+leaves in place.
+
+**Known gaps.** Seventeen medications, adult ranges only, mg-mass only — insulin
+is dosed in units and is excluded rather than guessed at. Frequency is not parsed,
+so "500mg six times daily" reads as plausible. There is no interaction checking,
+no renal or weight adjustment, and no real drug database behind it.

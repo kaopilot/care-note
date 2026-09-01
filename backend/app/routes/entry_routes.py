@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.core.audit_logging import log_event
+from app.services.dosage_gate import assert_dosages_confirmed
 from app.core.enums import (
     AI_SCRIBED_TYPES,
     EntryType,
@@ -68,6 +69,9 @@ class EntryUpdate(BaseModel):
     # optional would mean the safe path is the one you have to remember.
     expected_version: int
     change_summary: str | None = Field(default=None, max_length=300)
+    # See EntryCreate.dosage_confirmed — the same gate applies on edit, because
+    # a correction is exactly where a dose gets retyped (D-079).
+    dosage_confirmed: bool = False
 
 
 class RevertRequest(BaseModel):
@@ -295,6 +299,23 @@ def update_entry(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)
         ) from exc
+
+    # Same gate as on create. An edit is exactly where a dose gets retyped, and
+    # a correction to patient-facing text is the scenario-12 case (D-079).
+    dosage_overrides = assert_dosages_confirmed(
+        entry_type=EntryType(entry.type),
+        content=content,
+        confirmed=payload.dosage_confirmed,
+    )
+    if dosage_overrides:
+        log_event(
+            actor_id=scope.user_id,
+            action="entry.dosage_override",
+            target_type="entry",
+            target_id=entry.id,
+            clinic_id=scope.clinic_id,
+            metadata={"overrides": ",".join(dosage_overrides)},
+        )
 
     risk_level = payload.risk_level or RiskLevel(str(entry.risk_level))
     with _appending_version(scope, entry.id, payload.expected_version):

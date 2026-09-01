@@ -34,6 +34,11 @@ CLINICAL_ROLES = (Role.STAFF, Role.CLINICIAN, Role.ADMIN)
 
 class ScribeRequest(BaseModel):
     interaction_type: InteractionType
+    # Regeneration targets an existing session rather than creating a new one.
+    # Both fields are required together: regenerating without naming the session
+    # would silently pick one (D-078).
+    session_id: str | None = None
+    regenerate: bool = False
 
 
 @router.get("/patients/{patient_id}/glance")
@@ -148,12 +153,23 @@ def run_scribe(
             detail="Admin is an oversight role and does not author clinical content",
         )
 
-    entry = scribe.run_scribe(
-        scope.db,
-        patient=patient,
-        interaction_type=payload.interaction_type,
-        actor_id=scope.user_id,
-    )
+    try:
+        entry = scribe.run_scribe(
+            scope.db,
+            patient=patient,
+            interaction_type=payload.interaction_type,
+            actor_id=scope.user_id,
+            session_id=payload.session_id,
+            regenerate=payload.regenerate,
+        )
+    except scribe.RegenerationRefused as exc:
+        # 409, not 400. Nothing about the request is malformed — the record is
+        # in a state where honouring it would destroy something. The message is
+        # written for the clinician who will read it, and says what to do next.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "reason": exc.reason},
+        ) from exc
     # Attach the provenance record to the response. The redaction count and the
     # confidence figure are the two things that make this entry auditable rather
     # than merely present, and the client shows both on the card.
