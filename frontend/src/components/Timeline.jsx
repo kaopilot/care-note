@@ -74,6 +74,7 @@ export default function Timeline({
   entries,
   processing,
   onCancelProcessing,
+  patientId,
   emphasis,
   users,
   session,
@@ -137,6 +138,7 @@ export default function Timeline({
                 canHighlight={canHighlight}
                 canRestore={canRestore}
                 onChanged={onChanged}
+                patientId={patientId}
                 registerRef={registerRef(entry.id)}
               />
             ))}

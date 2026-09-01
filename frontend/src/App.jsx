@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Api, ApiError } from './lib/api'
+import DosageConfirm from './components/DosageConfirm'
 import GlanceView from './components/GlanceView'
 import PatientHome from './components/PatientHome'
 import Timeline from './components/Timeline'
@@ -172,13 +173,30 @@ function Workspace({ session, onSignOut }) {
     if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
 
-  async function addEntry() {
+  // The server refuses a patient-facing write carrying an implausible dose
+  // (D-079). Holding the 409 detail here is what turns that refusal into a
+  // decision the clinician can make, rather than an error they have to
+  // interpret.
+  const [dosageGate, setDosageGate] = useState(null)
+
+  async function addEntry({ dosageConfirmed = false } = {}) {
     if (!draft.trim() || !writable) return
     try {
-      await Api.createEntry(selected, { type: writable.type, content: draft })
+      await Api.createEntry(selected, {
+        type: writable.type,
+        content: draft,
+        dosage_confirmed: dosageConfirmed,
+      })
+      setDosageGate(null)
       setDraft('')
       await load(selected)
     } catch (err) {
+      if (err.status === 409 && err.detail?.reason === 'dosage_needs_confirmation') {
+        // Not an error message. The draft is kept exactly as typed so the
+        // clinician can correct the figure rather than retype the note.
+        setDosageGate(err.detail)
+        return
+      }
       setError(err.message)
     }
   }
@@ -300,6 +318,7 @@ function Workspace({ session, onSignOut }) {
             entries={entries}
             processing={processing}
             onCancelProcessing={cancelScribe}
+            patientId={selected}
             emphasis={emphasis}
             users={users}
             session={session}
@@ -319,9 +338,20 @@ function Workspace({ session, onSignOut }) {
                       onChange={(event) => setDraft(event.target.value)}
                       placeholder="Plain text. Clinical notation such as BP <130/80 is stored exactly as written."
                     />
-                    <Button variant="primary" disabled={!draft.trim()} onClick={addEntry}>
+                    <Button
+                      variant="primary"
+                      disabled={!draft.trim()}
+                      onClick={() => addEntry()}
+                    >
                       Add to record
                     </Button>
+                    {dosageGate && (
+                      <DosageConfirm
+                        detail={dosageGate}
+                        onCancel={() => setDosageGate(null)}
+                        onConfirm={() => addEntry({ dosageConfirmed: true })}
+                      />
+                    )}
                   </div>
                 )}
                 {session.role !== 'admin' && (

@@ -16,6 +16,8 @@
  */
 
 import { useRef, useState } from 'react'
+
+import DosageConfirm from './DosageConfirm'
 import { Api } from '../lib/api'
 import { ROLE_ACCENT, entryLabel, relativeAge, roleLabel, shortDateTime } from '../lib/format'
 import Comments from './Comments'
@@ -39,6 +41,7 @@ export default function EntryCard({
   canHighlight,
   canRestore,
   onChanged,
+  patientId,
   registerRef,
 }) {
   const [open, setOpen] = useState(null) // 'comments' | 'history' | 'edit' | 'correct'
@@ -48,9 +51,37 @@ export default function EntryCard({
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [dosageGate, setDosageGate] = useState(null)
+  const [regenBlocked, setRegenBlocked] = useState(null)
   const contentRef = useRef(null)
 
   const isAi = entry.is_ai_scribed
+
+  // Scenario: the model produced a poor summary and someone wants it re-run.
+  // Only offered on AI entries that still carry their session, because
+  // regeneration re-reads that transcript rather than inventing a new one.
+  const canRegenerate = isAi && Boolean(entry.ai_session_id) && Boolean(patientId)
+
+  async function regenerate() {
+    setBusy(true)
+    setError(null)
+    setRegenBlocked(null)
+    try {
+      await Api.regenerateScribe(patientId, entry.type, entry.ai_session_id)
+      onChanged?.()
+    } catch (err) {
+      if (err.status === 409 && err.detail?.reason === 'human_edited') {
+        // Not a failure. The system is refusing to replace a clinician's own
+        // words with a model's second attempt (D-078), and the message says
+        // how to proceed if they want it anyway.
+        setRegenBlocked(err.detail.message)
+      } else {
+        setError(err.message)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
   const accent = ROLE_ACCENT[entry.author_role] || 'border-l-slate-300'
   // A cold entry shows a compressed summary. The full text is one audited
   // click away — the point of saying so on the card is that a clinician should
@@ -80,7 +111,7 @@ export default function EntryCard({
     }
   }
 
-  async function saveEdit() {
+  async function saveEdit({ dosageConfirmed = false } = {}) {
     setBusy(true)
     setError(null)
     try {
@@ -89,10 +120,19 @@ export default function EntryCard({
         title: entry.title,
         expected_version: entry.version_number,
         change_summary: 'edited in consult',
+        dosage_confirmed: dosageConfirmed,
       })
+      setDosageGate(null)
       setOpen(null)
       onChanged?.()
     } catch (err) {
+      if (err.status === 409 && err.detail?.reason === 'dosage_needs_confirmation') {
+        // An edit is exactly where a dose gets retyped, and a correction to
+        // patient-facing text is the scenario-12 case. Same gate as on create.
+        setDosageGate(err.detail)
+        setBusy(false)
+        return
+      }
       // A 409 carries the current state, so the message can say what actually
       // happened rather than "please try again".
       if (err.status === 409 && err.detail?.current_version) {
@@ -251,6 +291,11 @@ export default function EntryCard({
             )}
           </Button>
         )}
+        {canRegenerate && (
+          <Button onClick={regenerate} disabled={busy}>
+            {busy ? 'Regenerating…' : 'Regenerate summary'}
+          </Button>
+        )}
         <Button onClick={() => setOpen(open === 'history' ? null : 'history')}>
           History <span className="ml-1 font-mono text-[10px] text-slate-500">v{entry.version_number}</span>
         </Button>
@@ -296,13 +341,21 @@ export default function EntryCard({
             in history, and can be restored.
           </p>
           <div className="mt-1 flex gap-1">
-            <Button variant="primary" disabled={busy} onClick={saveEdit}>
+            <Button variant="primary" disabled={busy} onClick={() => saveEdit()}>
               {busy ? 'Saving…' : 'Save changes'}
             </Button>
             <Button variant="quiet" onClick={() => setOpen(null)}>
               Cancel
             </Button>
           </div>
+          {dosageGate && (
+            <DosageConfirm
+              detail={dosageGate}
+              busy={busy}
+              onCancel={() => setDosageGate(null)}
+              onConfirm={() => saveEdit({ dosageConfirmed: true })}
+            />
+          )}
         </div>
       )}
 
@@ -333,6 +386,21 @@ export default function EntryCard({
       {open === 'comments' && canComment && (
         <Comments entry={entry} users={users} onChanged={onChanged} />
       )}
+      {regenBlocked && (
+        <div className="mt-2 rounded border border-amber-400 bg-amber-50 px-2.5 py-2">
+          <p className="text-xs font-semibold text-amber-950">
+            Not regenerated — a person has edited this
+          </p>
+          <p className="mt-0.5 text-[11px] leading-snug text-amber-900">{regenBlocked}</p>
+          <button
+            onClick={() => setRegenBlocked(null)}
+            className="mt-1.5 text-[11px] text-amber-800 underline hover:text-amber-950"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {open === 'history' && (
         <VersionHistory
           entry={entry}

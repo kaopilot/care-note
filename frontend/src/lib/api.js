@@ -120,6 +120,15 @@ export const Api = {
   scribeTemplates: () => api('/scribe/templates'),
   // `options` carries an AbortSignal so a clinician can abandon a slow model
   // call rather than watching a spinner with a patient in the room (D-070).
+  // Regeneration targets an existing session. The server reuses the entry and
+  // appends a version, so accepted highlights and comments survive (D-078).
+  regenerateScribe: (patientId, interactionType, sessionId) =>
+    api(`/patients/${patientId}/scribe`, body({
+      interaction_type: interactionType,
+      session_id: sessionId,
+      regenerate: true,
+    })),
+
   runScribe: (patientId, interactionType, options = {}) =>
     api(`/patients/${patientId}/scribe`, {
       ...body({ interaction_type: interactionType }),
