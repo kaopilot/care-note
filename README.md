@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (435 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (486 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -126,10 +126,10 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 435 tests
+pytest tests/ -v                  # from the repository root — 486 tests
 ```
 
-435 tests, all passing, no API key or network required. Roughly 29 seconds.
+486 tests, all passing, no API key or network required. Roughly 35 seconds.
 
 To run just the four files the brief names:
 
@@ -140,6 +140,16 @@ pytest tests/test_highlight_provenance.py -v  # every pointer resolves
 pytest tests/test_concurrent_edits.py -v      # parallel edits, deterministic conflicts
 pytest tests/test_self_learning_importance.py -v   # BONUS — adaptive prioritisation
 pytest tests/test_voice_capture.py -v              # BONUS — ambient consult capture
+```
+
+The five files from the clinic-scenario review:
+
+```bash
+pytest tests/test_failure_modes.py -v         # provider outage, crash-log hygiene, timeout
+pytest tests/test_language_risk_floor.py -v   # risk floor parity across languages, negation
+pytest tests/test_contradiction_denial.py -v  # allergy asserted in one entry, denied in another
+pytest tests/test_delivery_state.py -v        # written / read / corrected, and unreachable
+pytest tests/test_enrolment.py -v             # registering a patient who has only a phone number
 ```
 
 Or by area:
@@ -339,6 +349,44 @@ D-045/D-046.
 
 ---
 
+## What happens when things fail
+
+Two chokepoints, mirroring the redaction one above.
+
+**`backend/app/ai/llm_client.py` → `LLMUnavailableError`.** Timeouts, transport
+errors, 5xx and 429 all become one domain exception. The chokepoint translates;
+it does not decide. Each caller chooses whether degrading is safe for its
+purpose — the scribe falls back to the deterministic extractive summariser and
+labels the result `offline-extractive-v1:provider-unavailable`, and a
+patient-facing generator would refuse outright. 4xx deliberately stays loud: a
+bad API key hiding behind a slightly worse summary is indistinguishable from a
+real outage.
+
+Timeout is 8 seconds, configurable via `CARENOTE_LLM_TIMEOUT_SECONDS`. It was
+60, which is a batch-job timeout rather than one a clinician standing next to a
+patient can use.
+
+**`backend/app/core/errors.py` → `install_error_handlers()`.** Unhandled
+exceptions are logged as type, method, path and an eight-character reference —
+never `str(exc)`, which is exactly where SQLAlchemy puts bound parameters. The
+same reference goes back to the client, so a clinician can quote it and an
+engineer can find the request without the log holding a patient.
+
+It is middleware rather than `@app.exception_handler(Exception)` for a specific
+reason: Starlette's `ServerErrorMiddleware` calls a registered handler and then
+**re-raises** so the ASGI server can log the traceback. A handler alone would
+sanitise the response and leave the log leak exactly as it was.
+
+To see both paths under test:
+
+```bash
+CARENOTE_LLM_FORCE_UNAVAILABLE=true pytest tests/test_failure_modes.py -v
+```
+
+That flag installs a provider that always fails. It exists because the default
+stub provider is in-process and *cannot* fail — which is why the outage path went
+unexercised for the entire original build.
+
 ## How RBAC is enforced
 
 **`backend/app/security/rbac.py`** (mechanism) ·
@@ -457,6 +505,44 @@ an undisclosed gap has reason to wonder what else was not mentioned.
 | Segment-level provenance | Every summary line links to the spoken segment behind it, with speaker, timestamp and confidence |
 | Installable PWA | Manifest + service worker; `/api` is never cached |
 | Latency | Measured: P95 **13.3–15.9 ms** server handling across three runs, against a 300 ms budget |
+| Model outage handling | Provider 5xx / timeout / transport failure degrades to the deterministic summariser, visibly labelled (D-070) |
+| Crash log hygiene | Sanitised-error middleware — type, route and a reference id, never the exception message (D-071) |
+| Risk floor language parity | Works in canonical tag space, so English and Malay produce the same floor (D-072) |
+| Unreadable content | A substantive turn in an unsupported language is flagged rather than silently producing nothing (D-072) |
+| Allergy asserted vs denied | Detected as its own contradiction class at HIGH (D-073) |
+| Patient reach | `unread` / `read` / `corrected`; a correction the patient has not seen is surfaced to both sides (D-074) |
+| Patient enrolment | Staff can register a patient and issue a login; a phone number is a first-class identifier (D-075) |
+
+### Phase 9 — changes made after the clinic-scenario review
+
+The reviewers supplied sixteen scenarios drawn from real clinic operations and
+asked for a self-assessment. Working through them produced six new decisions
+(D-070 to D-075) and 51 new tests. The full assessment, including the items still
+unresolved, is the honest account; this table is the summary.
+
+| Scenario | Was | Now |
+|---|---|---|
+| 1 — patient with no email | Identity model fine, but nothing could create the row | Staff-scoped enrolment, phone as identifier |
+| 3 — read your logs | Unhandled 500 leaked name + NRIC + content via SQLAlchemy bound parameters | Sanitised middleware; three tests fail without it |
+| 6 — trilingual consult | Risk floor English-only; Hokkien produced nothing, silently | Floor is language-independent; unreadable content flagged |
+| 8 — model hangs | 60s timeout, no cancel | 8s timeout; cancel still missing |
+| 9 — provider 503 | Unhandled 500; the fallback only fired on unparseable JSON | Degrades to the extractive summariser, labelled |
+| 11 — link never received | No delivery path, and no way to know | Reach modelled honestly; still no sender |
+| 12 — wrong dosage | Correction invisible to the patient as a correction | Plain-language correction banner, computed before the read marker moves |
+| 13 — allergy vs denial | Returned **zero** contradictions | `assertion_vs_denial` at HIGH |
+
+Two root causes ran through several of these and are worth stating plainly, since
+they are more useful than the individual fixes:
+
+1. **The stub provider cannot fail.** It is in-process, so it cannot time out,
+   refuse a connection or return a 503. Every test run and demo for the whole
+   build executed against a provider physically incapable of failing, which is
+   why the outage path was never exercised. `CARENOTE_LLM_FORCE_UNAVAILABLE` now
+   puts that path back under test.
+2. **The seed script stood in for features.** `init_db.py` runs in Phase 1 step
+   1, so patients always already existed and "how does a patient come to exist?"
+   never arose. Anything a seed provides is a feature you have not built and will
+   not notice missing.
 
 ### Partial or deliberately deferred
 
@@ -508,8 +594,29 @@ README exists not to do.
 - **Redaction is regex plus a name gazetteer, not clinical NER.** Lowercase or
   transliterated names in running prose can survive. Fails closed on anything it
   does detect post-redaction, but recall is bounded by the patterns.
-- **The scribe pipeline is synchronous.** A crash mid-run loses the summary
-  rather than leaving a retryable job.
+- **The scribe pipeline is synchronous.** Provider *unavailability* is now
+  handled and degrades visibly (D-070), but a process crash mid-run still loses
+  the summary rather than leaving a retryable job.
+- **No circuit breaker.** During a sustained outage, every consult pays the full
+  8-second timeout to learn what the first one already learned.
+- **No cancel on a slow model call.** The timeout is now 8 seconds rather than
+  60, so the wait is bounded, but a clinician cannot abandon it early.
+- **There is no sender.** No email, SMS, WhatsApp or push. Patient-facing content
+  is pull-only, and `dispatched` is deliberately not modelled rather than faked
+  (D-074). Read state is also per-patient, not per-entry: opening the portal
+  marks everything current as read.
+- **Language identification is unverified.** It is taken from the ASR provider's
+  tag, so a recogniser that mislabels Hokkien as English produces no unreadable
+  flag (D-072). Nothing flags untagged content in a *supported* language, which
+  is the larger recall gap.
+- **Contradiction detection ignores time.** An allergy recorded in 2019 and
+  denied today reads identically to the reverse, though the second is far more
+  likely to be a genuine correction (D-073).
+- **Clinic provisioning is still `init_db.py`.** Deliberate — tenant creation is
+  an operator path, not an in-app button. But per-clinic configuration is a real
+  gap: clinical vocabulary, red-flag terms, decay thresholds and confidence bands
+  are module-level constants shared by every clinic, so a second clinic cannot
+  tune any of them without a deploy (D-075).
 - **Importance scoring is keyword-based.** A medication absent from the
   watchlist scores as ordinary prose — a recall gap, not a safety gap: an
   unrecognised term is simply not promoted, and the entry still sits in the

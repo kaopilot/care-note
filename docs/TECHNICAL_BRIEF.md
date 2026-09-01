@@ -274,10 +274,10 @@ survives in greyscale.
 
 | | Risk badge | Confidence label | Importance score |
 |---|---|---|---|
-| **What it is** | Ordinal none→critical. Deterministic rules over transcript text set a **floor**; a model may raise it, never lower it | A number in 0.35–0.90 measured from hedging density in the source, banded high/medium/low | Weighted sum of named terms (recency, risk, entities, open actions) plus a learned term capped at 0.25 |
-| **How we'd know it was wrong** | Same input must give same level every run; a floor test asserts `chest pain` cannot resolve below `high`. Drift is visible because `model_proposed_risk` and `risk_floor_applied` are both stored | Confidence must fall as hedging rises — asserted against a plain and a hedged transcript. The band boundary and the UI's flag threshold are asserted to be the same constant | Every highlight shows its own arithmetic; a wrong ranking is inspectable term by term rather than argued about |
+| **What it is** | Ordinal none→critical. Deterministic rules set a **floor**; a model may raise it, never lower it. The floor works over canonical *tags*, not English strings, so it inherits every language the tagger knows (D-072) | A number in 0.35–0.90 measured from hedging density in the source, banded high/medium/low | Weighted sum of named terms (recency, risk, entities, open actions) plus a learned term capped at 0.25 |
+| **How we'd know it was wrong** | Same input must give same level every run; a floor test asserts `chest pain` cannot resolve below `high`, and a paired test asserts Malay and English forms of the same symptom produce the *same* floor. Drift is visible because `model_proposed_risk` and `risk_floor_applied` are both stored | Confidence must fall as hedging rises — asserted against a plain and a hedged transcript. The band boundary and the UI's flag threshold are asserted to be the same constant | Every highlight shows its own arithmetic; a wrong ranking is inspectable term by term rather than argued about |
 | **What happens when it is** | The rule floor holds the badge up. `risk_floor_applied` tells the clinician the level came from a rule, not a model's mood | Below 0.60 the summary is flagged "verify against source" separately from risk, and the provenance rail opens the transcript | The clinician accepts or rejects in one click; rejection dampens the tag — except safety vocabulary, floored at zero so fatigue cannot silence anaphylaxis |
-| **When it abstains** | Unparseable model risk falls back to `low`, and the deterministic floor still applies on top | Never claims 1.0 — a summariser reading a transcript it did not hear has no business reporting certainty | A span with no clinical reason produces **no highlight at all**; the rule layer runs before scoring |
+| **When it abstains** | Unparseable model risk falls back to `low`, with the deterministic floor still applied on top. A symptom that appears only inside a negation does not set the floor — but one un-negated mention anywhere does, so "no chest pain Monday, chest pain today" still rates high (D-072) | Never claims 1.0 — a summariser reading a transcript it did not hear has no business reporting certainty | A span with no clinical reason produces **no highlight at all**; the rule layer runs before scoring |
 
 The same discipline governs the two places abstention matters most.
 **Attribution** classifies each summary line `verbatim` / `derived` / **nothing**
@@ -436,7 +436,7 @@ production shape; the honest consequence is that **this build is not safe for
 real PHI as-is**, which the README states too so it cannot be missed by someone
 who opens one file.
 
-**Verification.** 435 backend tests plus 25 frontend component tests, no API key
+**Verification.** 486 backend tests plus 25 frontend component tests, no API key
 or network needed. Access-control and history tests were **deliberately broken to
 confirm they can fail** — reversing D-004 fails exactly the staff-visibility
 tests, removing the clinic filter fails 15, disabling the conflict guard fails 3.
@@ -444,4 +444,82 @@ The same discipline applied to the Phase 7 regressions: 10 of 25 frontend tests
 and 10 of 15 backend ones fail when the code they cover is reverted. A security
 test that cannot fail is worse than none, because it is mistaken for coverage.
 Logs were grepped for planted names, identifiers and body text after exercising
-every route: zero hits.
+every route: zero hits **on the success path**. The failure path was a different
+story, and the reviewers' scenario 3 is what found it: an unhandled exception
+reached Starlette's default handler and uvicorn logged the traceback, and
+SQLAlchemy embeds bound parameters in its exception messages — so a name, an
+NRIC and note content landed in one stderr line. `log_event` made it hard to log
+content *on purpose*; nothing covered content logged on our behalf by code we did
+not write. Fixed in D-071 and pinned by three tests that fail without the
+middleware. The original claim was true and the wrong question had been asked of
+it.
+
+---
+
+## 8. What the clinic-scenario review changed
+
+The reviewers supplied sixteen scenarios drawn from real clinic operations —
+the patient who is only a phone number, the trilingual consult, the provider that
+returns 503 for an hour — and asked for a self-assessment rather than a defence.
+Our own assessment came out **6 SURVIVES, 6 PARTIAL, 4 DOES NOT**. Six decisions
+(D-070 to D-075) and 51 tests followed.
+
+The individual fixes are in `DECISIONS.md`. What is worth stating here is the
+pattern, because it is more useful than any of them.
+
+**What survived was structural; what failed was operational.** Access control
+fused into a type, redaction fused into the only code that can reach a network,
+highlights anchored to a version number — all held. What failed was every
+question of the form "what happens when": when the provider is down, when the
+server crashes, when a clinic needs to add a patient on a Tuesday. We had built a
+record system and had not built the clinic around it. The phase docs are part of
+the explanation: every exit criterion across all seven phases is a positive
+capability, and not one describes what should happen when something breaks.
+
+**Two defaults made whole classes of failure unobservable.**
+
+*The stub LLM provider is in-process and cannot fail.* It cannot time out, refuse
+a connection or return a 503. Every test run, smoke script and demo for the
+entire build executed against a provider physically incapable of failing, so the
+outage path was never exercised — and it turned out to be an unhandled 500 with a
+traceback. The default is still right: it makes the build runnable without an API
+key and the tests deterministic. But it bought that determinism by removing the
+failure surface from view, and nothing made the trade visible.
+`CARENOTE_LLM_FORCE_UNAVAILABLE` now puts the path back under test on every run.
+
+*The seed script stood in for features.* `init_db.py` runs at Phase 1 step 1, so
+from the first commit every test and demo began with a populated database.
+"How does a patient come to exist?" never arose as a question because patients
+always already existed. The generalisation is worth more than the fix: **anything
+a seed provides is a feature you have not built and will not notice missing.**
+
+**A fix at one layer did not propagate to another making the same assumption.**
+D-058 taught the tagger Malay. The deterministic risk floor was a separate code
+path matching English phrases against raw text, and it kept the English-only
+assumption — so the tagger was bilingual and the safety mechanism sitting on top
+of it was not. Every Malay fixture passed, because they only ever exercised the
+tagger. Measured: "chest pain when I walk uphill" rated `high`, "sakit dada bila
+naik tangga" rated `medium`. The floor now works in tag space, which makes adding
+a language one change instead of two, and removes the possibility of forgetting
+the second.
+
+**A correct guard can discard the thing you needed.** Negated mentions were
+dropped so that "patient denies allergy to aspirin" never became a critical
+alert — correct in isolation, and it also discarded the patient's denial, so the
+nurse-records-penicillin / patient-denies-allergies case produced *zero*
+contradictions. A denial is a position, and it can disagree with a position
+recorded elsewhere. It is now its own claim kind at HIGH rather than CRITICAL:
+nothing dangerous has happened yet, the safe action is already in force, and
+diluting CRITICAL would break the level that means "someone is about to be given
+a drug they react to".
+
+**What we still cannot do, stated plainly.** There is no sender, so patient
+content remains pull-only and `dispatched` is deliberately unmodelled rather than
+faked. There is no circuit breaker and no cancel on a slow model call. Language
+identification is taken from the recogniser and never verified. Clinic
+provisioning is still a script, and per-clinic configuration does not exist at
+all — vocabulary, red flags, decay thresholds and confidence bands are module
+constants shared by every tenant. Those are the next things we would build, and
+the reason they are listed here rather than omitted is the same reason the
+known-gaps table exists: a control whose edges nobody knows is worse than a
+weaker one everybody understands.

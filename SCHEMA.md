@@ -55,8 +55,8 @@ erDiagram
         string id PK
         string clinic_id FK
         string name
-        string dob
-        string mrn
+        string dob "nullable - D-075"
+        string mrn "nullable, provisional if unassigned - D-075" 
     }
     ENTRY {
         string id PK
@@ -672,3 +672,59 @@ the same metadata contract, because Phase 0 modelled transcripts as
 speaker-labelled turns with timings and confidence rather than as flat text —
 and `TRANSCRIPT_SEGMENT` was commented from the start as a Phase 5 provenance
 target. Ambient capture changes where the words come from and nothing else.
+
+---
+
+## Phase 9 schema changes
+
+Three changes, all from the clinic-scenario review. No new tables.
+
+### `AIScribedNote.unreadable_segment_count` (new column)
+
+Integer, default 0. Transcript turns that carried clinical weight but produced no
+tags, because they were in a language this build has no vocabulary for.
+
+Stored rather than recomputed for two reasons: the Glance View would otherwise
+re-tag an entire transcript on every load, and a count that only exists at render
+time cannot be audited after the fact. Surfaced as a Glance View flag distinct
+from low confidence — "the system read this and is unsure" and "the system did
+not read part of this" are different warnings (D-072).
+
+### `Patient.dob` and `Patient.mrn` are now nullable
+
+Both were `NOT NULL`. Requiring a date of birth before a patient can exist
+excludes anyone who does not know it or will not give it at a front desk;
+requiring an MRN means she cannot be registered until some other system has
+assigned one. The schema was a second, quieter way of deciding that a patient
+known only as a phone number was not a patient.
+
+Enrolment issues a provisional MRN (`PROV-XXXXXXXX`) rather than refusing, so the
+field stays useful where a clinic does assign numbers (D-075).
+
+**Migration note:** `Base.metadata.create_all` does not alter existing tables. A
+development database created before this commit needs re-seeding —
+`rm carenote.db && python backend/init_db.py`.
+
+### Delivery state — derived, not stored
+
+`services/delivery.py` computes `unread` / `read` / `corrected` per patient-facing
+entry from data already present:
+
+| Input | Source |
+|---|---|
+| when the patient last opened her record | `PatientView.last_viewed_at` (D-033) |
+| when this entry was first readable | earliest `Version.edited_at` |
+| when it last changed | latest `Version.edited_at` |
+
+No new column, because nothing new needed recording — `PatientView` had held the
+answer since D-033 and nothing had ever asked it this question. `dispatched` is
+deliberately absent from the state set: nothing dispatches, and modelling the
+state would be a false assurance in a new place. When a sender exists it slots
+between `written` and `read` without disturbing either (D-074).
+
+### Updated relationship notes
+
+| Relationship | Note |
+|---|---|
+| Patient → User (`role='patient'`) | Optional. A patient with no login is a valid record, reported as `reachable: false` rather than silently treated as unread (D-074, D-075) |
+| Entry → Version | The version chain is what makes `corrected` computable; pruning it would break delivery state as well as highlight anchoring (D-030) |

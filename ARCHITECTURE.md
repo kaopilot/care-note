@@ -2,7 +2,8 @@
 
 **Status:** Complete (Phases 0–8). The product surface, both bonus tracks
 (self-learning importance, data decay), ambient voice capture, and the
-evaluation work from Phase 8 are all built. 435 backend tests and 25 frontend
+evaluation work from Phase 8 are all built, plus the Phase 9 fixes from the
+clinic-scenario review (D-070 to D-075). 486 backend tests and 25 frontend
 tests pass.
 
 **How to read this document.** Sections were appended as each phase was built,
@@ -426,7 +427,8 @@ statuses are used throughout, and they mean different things:
 | PHI redaction chokepoint | **Implemented** — regex + gazetteer, fail-closed. Not production-grade; see gaps below |
 | Stored-XSS / content safety | **Implemented** — untrusted content never rendered as HTML, enforced by source scan |
 | RBAC enforcement | **Implemented** — role + clinic fused, server-side, proven over HTTP |
-| Logging hygiene | **Implemented** — content-free by construction, verified by grep and test |
+| Logging hygiene — deliberate logs | **Implemented** — `log_event` is content-free by construction, verified by grep and test |
+| Logging hygiene — crashes | **Implemented (D-071)** — sanitised-error middleware logs type + route + reference, never `str(exc)`. Previously an unhandled `IntegrityError` put a name, an NRIC and note content into stderr via SQLAlchemy's bound parameters |
 | JWT storage (httpOnly cookie) | **Implemented** — `HttpOnly; SameSite=lax; Max-Age=3600` |
 | CSRF defence | **Documented decision** — `SameSite=lax` only; no token-based defence |
 | Token refresh / rotation / revocation | **Known gap** — no refresh flow, no denylist |
@@ -438,7 +440,22 @@ statuses are used throughout, and they mean different things:
 | AI provenance and confidence | **Implemented** — session pointer, model path, redaction count, derived confidence, all surfaced |
 | Conflict handling | **Implemented** — clinician precedence *and* a visible flag; disputed content never deleted |
 | Comment isolation from patients | **Implemented** — refused at the route *and* stamped `is_internal` at write |
-| Scribe failure recovery | **Known gap** — synchronous pipeline; a crash mid-run loses the summary rather than leaving a retryable job (D-032) |
+| Model provider outage | **Implemented (D-070)** — timeouts, transport errors, 5xx and 429 become `LLMUnavailableError`; the scribe degrades to the deterministic extractive summariser, labelled `offline-extractive-v1:provider-unavailable`. 4xx stays loud |
+| Model call timeout | **Implemented (D-070)** — 8s, configurable. Was 60s, which is a batch-job timeout, not one a clinician standing next to a patient can use |
+| Repeated-outage backoff | **Known gap** — no circuit breaker; the 400th consult of an outage hour still waits the full timeout to learn what the first one learned |
+| Scribe failure recovery | **Known gap** — synchronous pipeline; a crash mid-run still loses the summary rather than leaving a retryable job (D-032). Provider *unavailability* is now handled; process failure is not |
+| Risk floor language parity | **Implemented (D-072)** — the floor works in canonical tag space, so it inherits every language the tagger knows. Previously English-only, so Malay chest pain rated `medium` where English rated `high` |
+| Content the vocabulary cannot read | **Implemented (D-072)** — a substantive turn in an unsupported language producing no tags is flagged on the Glance View, distinct from low confidence. Abstention rather than confident silence |
+| Language identification | **Known gap** — taken from the ASR provider's tag and never verified. A recogniser that mislabels Hokkien as English produces no flag |
+| Untagged content in a *supported* language | **Known gap** — the larger recall gap; nothing flags English prose the vocabulary simply missed |
+| Allergy asserted vs denied | **Implemented (D-073)** — `assertion_vs_denial` at HIGH. Previously the nurse-records-penicillin / patient-denies-allergies case returned zero findings |
+| Contradiction temporal ordering | **Known gap** — an allergy recorded in 2019 and denied today reads the same as the reverse, though the second is far more likely a genuine correction |
+| Patient-facing reach | **Implemented (D-074)** — `unread` / `read` / `corrected`, derived from `PatientView`. A correction the patient has not seen is surfaced to both sides |
+| Message delivery | **Known gap** — there is no sender. `dispatched` is deliberately not modelled rather than faked |
+| Per-entry read acknowledgement | **Known gap** — read state is per-patient; opening the portal marks everything current as read |
+| Patient enrolment | **Implemented (D-075)** — staff can register a patient and issue a login; identifier type is explicit and a phone number is first-class. Previously only `init_db.py` could create an account |
+| Clinic provisioning | **Known gap** — still `init_db.py`. Deliberate: tenant provisioning is an operator path, not an in-app button |
+| Per-clinic configuration | **Known gap** — clinical vocabulary, red-flag terms, decay thresholds and confidence bands are module-level constants shared by every clinic (D-075) |
 | Redaction recall on unanticipated names | **Known gap** — gazetteer + patterns only; lowercase and transliterated names in running prose can survive (D-012) |
 | Enum comparison correctness | **Implemented (guarded)** — `==` throughout; a source scan fails the build on identity comparison against an ORM-loaded enum column (D-055) |
 | Enum columns typed as `String`, not `Enum` | **Known gap** — the structural fix for D-055. Reloaded values are plain `str`, so correctness rests on a regex scan rather than the type system |
