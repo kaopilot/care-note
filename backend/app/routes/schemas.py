@@ -52,6 +52,12 @@ class EntryOut(BaseModel):
     risk_floor_applied: bool = False
     ai_session_id: str | None = None
     ai_model_used: str | None = None
+    # True when the provider was unreachable and the deterministic
+    # summariser produced this note instead. A first-class field, not a
+    # substring for the client to look for: the clinician-facing question
+    # "did a model actually read this consult?" deserves a real answer in
+    # the wire format. See DECISIONS.md D-082.
+    ai_degraded: bool = False
     ai_redaction_count: int | None = None
     comment_count: int = 0
     open_comment_count: int = 0
@@ -94,6 +100,7 @@ def entry_out(
         risk_floor_applied=bool(getattr(ai_note, "risk_floor_applied", False)),
         ai_session_id=getattr(ai_note, "session_id", None),
         ai_model_used=getattr(ai_note, "model_used", None),
+        ai_degraded=scribe.is_degraded(getattr(ai_note, "model_used", None)),
         ai_redaction_count=getattr(ai_note, "redaction_count", None),
         comment_count=comment_count,
         open_comment_count=open_comment_count,

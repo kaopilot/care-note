@@ -87,6 +87,25 @@ SUMMARY_TITLE: dict[InteractionType, str] = {
     InteractionType.AI_PATIENT_SESSION: "Patient session summary (AI-scribed)",
 }
 
+# The model string written when the provider could not be reached and the
+# deterministic summariser produced the note instead. Named rather than
+# inlined because the API and the UI both need to ask "was this degraded?",
+# and answering it by substring-matching a magic string in two places is how
+# the two surfaces drift apart.
+DEGRADED_MODEL_LABEL = "offline-extractive-v1:provider-unavailable"
+
+
+def is_degraded(model_used: str | None) -> bool:
+    """Was this summary produced without the model, because it was unreachable?
+
+    Distinct from low confidence. A low-confidence summary is one the model was
+    unsure about; a degraded one is a summary the model never saw. They call for
+    different things from a clinician, so they are different signals and must
+    not be collapsed into one badge.
+    """
+    return model_used == DEGRADED_MODEL_LABEL
+
+
 _SYSTEM_PROMPT = (
     "You are a clinical scribe. You are reading a de-identified consult "
     "transcript; all names and identifiers have already been replaced with "
@@ -401,7 +420,7 @@ def run_scribe(
 
     if response is None:
         summary = _extractive_summary(redacted_transcript, interaction_type)
-        model_used = "offline-extractive-v1:provider-unavailable"
+        model_used = DEGRADED_MODEL_LABEL
         model_self_reported = None
     else:
         parsed = _parse_model_json(response.text)

@@ -172,3 +172,99 @@ def test_timeout_is_short_enough_for_a_consult():
     assert settings.llm_timeout_seconds <= 10, (
         "a summary that takes longer than this has already missed its consult"
     )
+
+
+# --- Is the degradation actually visible to a clinician? -------------------
+#
+# Scenario 9 asks what the clinician gets during an outage. The answer was
+# "a rule-derived summary, labelled" — true of the data and much weaker in the
+# interface, where the only trace was `ai_model_used` rendered as a 10px grey
+# monospace string in the provenance footer, beside the pointer. That is a
+# machine-facing label in the place a clinician looks least. A degraded note
+# that reads as a normal AI note is the failure this guards against.
+#
+# See DECISIONS.md D-082.
+
+
+def test_degraded_state_is_a_first_class_field_not_a_magic_string(
+    db_session, seeded, forced_outage
+):
+    """The API answers "was this degraded?" directly.
+
+    A client that has to substring-match a model identifier will eventually
+    match it differently from the next client.
+    """
+    from app.services import scribe
+
+    assert scribe.is_degraded(scribe.DEGRADED_MODEL_LABEL) is True
+    assert scribe.is_degraded("anthropic:claude-sonnet-4-5") is False
+    assert scribe.is_degraded("offline-extractive-v1") is False, (
+        "no model configured is not the same as the model being unreachable"
+    )
+    assert scribe.is_degraded(None) is False
+
+
+def _wire(db, entry):
+    """The entry as the client actually receives it."""
+    from app.routes.schemas import entry_out
+
+    note = (
+        db.query(AIScribedNote).filter(AIScribedNote.entry_id == entry.id).one_or_none()
+    )
+    return entry_out(entry, ai_note=note)
+
+
+def test_degraded_entry_reports_ai_degraded_on_the_wire(db_session, seeded, forced_outage):
+    """The flag reaches the client that renders the card.
+
+    The label existed before this and lived only in `ai_model_used`, rendered
+    as a 10px grey monospace string in the provenance footer next to the
+    pointer — a machine-facing label in the place a clinician looks least. A
+    degraded note that reads like a normal AI note is the failure here.
+    """
+    patient, clinician = _clinic_a(db_session)
+    entry = scribe.run_scribe(
+        db_session,
+        patient=patient,
+        interaction_type=InteractionType.DOCTOR_PATIENT_CONSULT,
+        actor_id=clinician.id,
+    )
+
+    out = _wire(db_session, entry)
+    assert out.ai_degraded is True
+    assert out.content.strip(), "still a usable summary, not an empty card"
+
+
+def test_healthy_entry_is_not_marked_degraded(db_session, seeded):
+    """The signal has to be able to be off, or it means nothing."""
+    patient, clinician = _clinic_a(db_session)
+    entry = scribe.run_scribe(
+        db_session,
+        patient=patient,
+        interaction_type=InteractionType.NURSE_PATIENT_CONSULT,
+        actor_id=clinician.id,
+    )
+
+    assert _wire(db_session, entry).ai_degraded is False
+
+
+def test_degraded_is_independent_of_confidence(db_session, seeded, forced_outage):
+    """Two different questions, two different signals.
+
+    Collapsing them would tell a clinician the summary was uncertain when the
+    real problem is that no model read the consult at all. They call for
+    different responses, so they get different badges.
+    """
+    patient, clinician = _clinic_a(db_session)
+    entry = scribe.run_scribe(
+        db_session,
+        patient=patient,
+        interaction_type=InteractionType.AI_PATIENT_SESSION,
+        actor_id=clinician.id,
+    )
+
+    out = _wire(db_session, entry)
+    assert out.ai_degraded is True
+    assert out.ai_confidence is not None, (
+        "a degraded note still carries a confidence; the fields are orthogonal"
+    )
