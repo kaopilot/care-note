@@ -101,7 +101,9 @@ def test_a_login_can_be_issued_later(client, seeded):
     ).json()
 
     issued = client.post(
-        f"/patients/{created['patient_id']}/login?identifier=0198887777", headers=staff
+        f"/patients/{created['patient_id']}/login",
+        json={"identifier": "0198887777"},
+        headers=staff,
     )
     assert issued.status_code == 200
     assert len(issued.json()["one_time_passcode"]) == 6

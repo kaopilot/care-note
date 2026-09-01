@@ -1888,9 +1888,15 @@ messages are built from category names and carry no values, and because "nothing
 was sent to the model" and "the model is down" are different things a clinician
 should be able to tell apart. Everything else is opaque.
 
-**Known gap.** Uvicorn access logs still record request paths, which contain
-patient UUIDs. Pseudonymous rather than identifying, and unchanged by this work,
-but it is not nothing and there is still no retention policy.
+**Known gap, since narrowed — see D-083.** Uvicorn access logs still record the
+full request line. This entry originally described that as "request paths, which
+contain patient UUIDs — pseudonymous rather than identifying," which was too
+generous twice over. The access log records the query string as well as the path,
+it records it for requests that never reach the application at all (404s, RBAC
+refusals, malformed ids), and nothing constrained what a URL was allowed to
+carry. D-083 found an actual phone number going out that way and turned the
+convention into a tested invariant. The log itself is still unrotated and
+unscrubbed, and there is still no retention policy.
 
 ### D-072 · The risk floor works in tag space, and says so when it cannot read
 
@@ -2269,3 +2275,91 @@ leaves in place.
 is dosed in units and is excluded rather than guessed at. Frequency is not parsed,
 so "500mg six times daily" reads as plausible. There is no interaction checking,
 no renal or weight adjustment, and no real drug database behind it.
+
+### D-081 · One clinical disagreement is one card, however many entries evidence it
+
+Scenarios 13 and 15. `contradictions.detect` works pairwise. That is the right
+primitive — it is what makes every finding individually checkable and
+individually citable — and it is the wrong unit to put in front of a clinician.
+
+A penicillin allergy re-recorded at four routine visits, against two entries
+recording no known allergies, produces eight pairs. All eight say the same
+clinical thing: *this chart disagrees with itself about penicillin.*
+
+Duplication was the smaller problem. The Glance View caps the contradiction list
+at `MAX_CONTRADICTIONS = 5`, so the copies filled the cap and an unrelated
+metformin dose disagreement was evicted from the card entirely. A real,
+unresolved, clinically dangerous conflict was made invisible by a *different*
+conflict being mentioned often — and it got monotonically worse the longer the
+record grew, which is the one failure mode a longitudinal product cannot afford.
+
+`group()` collapses the display unit to `(kind, subject)` and carries every
+supporting entry with its own pointer in `also_left` / `also_right`. Nothing is
+discarded: a card that said "and 7 others" without pointers would trade an
+alert-fatigue problem for a provenance one, and scenario 16 requires findings
+stay addressable. `human_human` is the pessimistic reading — true if *any* pair
+in the group is human-human, because if even one pair pits two people against
+each other then no precedence rule settles it.
+
+**How this was missed.** Every existing test used exactly one assertion and one
+denial — the single shape where pairwise and grouped output are identical. It
+was found by probing the running app with a realistic chart, not by the suite.
+
+**Known gap.** Nothing monitors the dismissal rate on contradictions, so alert
+fatigue is still measured by nobody.
+
+### D-082 · Degraded is a first-class field, and a badge, not a model string
+
+Scenario 9. The backend answer was already right: on a provider outage the
+scribe degrades to the deterministic extractive summariser and records
+`model_used = "offline-extractive-v1:provider-unavailable"`. D-070 called that
+"legible as degraded."
+
+It was legible to an auditor reading the database. In the interface the only
+trace was `ai_model_used`, rendered as a 10px grey monospace string in the
+provenance footer beside the pointer — a machine-facing identifier in the place
+on the card a clinician looks least. During an hour-long outage a clinician
+would read what appeared to be an ordinary AI summary.
+
+Three changes. The magic string became `DEGRADED_MODEL_LABEL` with an
+`is_degraded()` helper, because two surfaces answering "was this degraded?" by
+substring-matching the same literal is how they drift apart. `ai_degraded`
+became a wire field, so no client has to parse an identifier to render a safety
+signal. And the card gained a chip in the existing vocabulary.
+
+**Kept distinct from confidence, deliberately.** Low confidence means the model
+was unsure. Degraded means no model read this consult at all. They call for
+different things from a clinician — the first invites scepticism about a
+judgement, the second says no judgement was made — so collapsing them into one
+"trust this less" badge would lose the more actionable of the two.
+
+**Known gap.** Nothing tells the clinician the outage is ongoing rather than
+historic; the badge is per-entry, and there is no service-health surface.
+
+### D-083 · No patient data travels in a URL, and a test enforces it
+
+Scenario 3, and the door the earlier answer missed. `log_event` (D-014) governs
+what we log on purpose. The sanitised error middleware (D-071) governs what
+crashes log on our behalf. Neither touches the ASGI access log, which records
+the full request line — method, path *and query string* — before the
+application sees the request, and identically whether it succeeded, 404'd, or
+was refused by RBAC.
+
+That makes a URL a logging sink. And the convention that URLs carry only opaque
+ids had already failed: `POST /patients/{patient_id}/login` took the patient's
+phone number as a query parameter. The feature written for scenario 1 — *she
+exists for the clinic as a phone number* — wrote that number into an unrotated,
+unscrubbed log on every use. Scenario 1's answer leaked through scenario 3's
+door.
+
+The identifier moved into the request body. More usefully, `tests/test_url_surface.py`
+turns the convention into an invariant: every path and query parameter on every
+route must appear in an explicit allowlist of opaque ids, enums, integers and
+structural pointers, and a second test asserts the allowlist itself contains
+nothing PHI-shaped, so the invariant cannot be satisfied by quietly widening it.
+The check is structural rather than behavioural because the failure mode is a
+plausible-looking route added months from now, not existing code misbehaving.
+
+**Known gap.** Patient and entry UUIDs are still in the access log. They are
+pseudonymous and, unlike a phone number, meaningless outside this database — a
+real deployment should still rotate and scrub, and there is no retention policy.

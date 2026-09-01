@@ -184,10 +184,29 @@ class IssueLoginOut(BaseModel):
     one_time_passcode: str
 
 
+class IssueLoginIn(BaseModel):
+    """The identifier travels in the body, deliberately.
+
+    It was a query parameter until D-083. For scenario 1 the identifier *is* a
+    phone number — that is the entire point of the feature — so every normal
+    use of it wrote a patient's phone number into the request URL, where the
+    ASGI access log records the full request line and keeps it for as long as
+    the container logs live. Redaction before the model was guarded; this was
+    a second door onto the same data, opened by the feature built to answer
+    scenario 1.
+
+    A request body is not logged by the access log. That is not a general
+    guarantee about bodies, it is a statement about this specific sink, and it
+    is the reason the parameter moved.
+    """
+
+    identifier: str | None = None
+
+
 @router.post("/patients/{patient_id}/login", response_model=IssueLoginOut)
 def issue_login(
     patient_id: str,
-    identifier: str | None = None,
+    payload: IssueLoginIn | None = None,
     scope: AccessScope = Depends(require_access(*ENROLLING_ROLES)),
 ) -> IssueLoginOut:
     """Give an existing patient a way in, or reset one they have lost.
@@ -196,6 +215,7 @@ def issue_login(
     issue credentials for a patient in Clinic B — the enrolment path is scoped
     by exactly the same rule as every read.
     """
+    identifier = payload.identifier if payload is not None else None
     patient = scope.get_or_404(Patient, patient_id)
 
     existing = (
