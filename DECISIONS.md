@@ -2013,3 +2013,58 @@ and denied today reads the same as the reverse, though the second is far more
 likely to be a genuine correction. Denials are only compared against allergies,
 not against dose or status claims. And a denial in a language the vocabulary does
 not cover is not detected at all (D-072).
+
+### D-074 · Reach is modelled; delivery is not, because nothing delivers
+
+Scenarios 11 and 12. There is no sender in this build — no email, no SMS, no
+WhatsApp, no push — and this decision does not add one. The failure it fixes is
+narrower and worse than the missing integration:
+
+> A clinician writes "come back in two weeks for a BP check", marks it done, and
+> moves on. The patient never opens the portal. The instruction is correct,
+> versioned, traceable and unread, and the system reports success.
+
+A build that cannot send is a limitation. A build that cannot tell you it did not
+send is a false assurance. The second is what shipped, and it is the part that is
+fixable without an integration.
+
+**Three states, and one deliberately absent.** `unread`, `read`, and `corrected`
+— the patient read an earlier version and it has since changed. `dispatched` is
+**not** modelled, because nothing dispatches; inventing the state would put the
+same false assurance in a new place. When a sender exists, it slots in between
+`written` and `read` and the two existing states keep their meaning.
+
+**No new storage.** `PatientView` has recorded the patient's own read timestamps
+since D-033. Nothing had ever asked it this question. The data to detect "written
+but never read" was already being collected, which is worth saying plainly: this
+was not a missing capability, it was a question nobody thought to ask of data
+already in the database.
+
+**`corrected` is the scenario-12 answer.** Patient-facing content is already
+protected on the generation side — no machine-written text can reach a patient at
+all (D-067) — so a wrong dosage in an instruction was typed by a clinician, which
+is the right place for that risk to sit. What was missing was the correction path.
+The clinician edits, a new version is recorded, the original is preserved, and the
+patient sees different text with nothing marking it as a correction. She took the
+wrong dose on Tuesday; on Friday she sees a different number and has no way to
+know it contradicts what she read. The patient view now leads with a plain-language
+banner: *"This was updated after you last read it… if you were following the
+earlier version, stop and read this one."*
+
+**Corrections are computed before `touch_view`.** That call rolls the read marker
+forward on page load, so computing after it would let the warning vanish on the
+exact page load meant to show it — the same shape of defect as D-060, caught this
+time because D-060 had already taught us to look for it. Pinned by
+`test_reading_the_page_does_not_swallow_the_correction`.
+
+**Unreachable is distinct from unread.** If no `User` row links to the patient,
+the clinician summary reports `reachable: false` rather than counting it as merely
+unopened. "She has not read it" and "there is no way for her to read it" are
+different problems for a clinic, and collapsing them would hide scenario 1 behind
+scenario 11.
+
+**Known gaps.** Read state is per-patient, not per-entry: opening the portal marks
+everything current as read, so a patient who opens the page and reads nothing
+registers as having read it. Per-entry acknowledgement is the honest version and
+is not built. Nothing yet escalates a correction that stays unread — there is no
+scheduler, and no channel for it to escalate to.

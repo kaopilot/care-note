@@ -51,6 +51,7 @@ from app.security import policy
 from app.services import highlights as highlight_service
 from app.services import scoring
 from app.services import contradictions as contradiction_service
+from app.services import delivery
 from app.services import scribe
 
 # A page refresh is not a new visit. Within this window the "since" marker holds
@@ -215,6 +216,10 @@ def build_glance(db: Session, *, role: Role, user_id: str, patient: Patient) -> 
         "confidence_flags": _confidence_flags(entries, ai_notes),
         "conflicts": _conflicts(entries, by_id),
         "contradictions": _contradictions(entries),
+        # Did anything written for the patient actually reach her? Nothing
+        # here sends, so this reports honestly on reach rather than claiming
+        # delivery (D-074).
+        "patient_delivery": delivery.clinician_summary(db, patient),
         "counts": _counts(db, patient, entries),
     }
 
@@ -580,6 +585,12 @@ def build_patient_glance(db: Session, *, user_id: str, patient: Patient) -> dict
         .order_by(Entry.timestamp.desc())
         .all()
     )
+    # Computed BEFORE touch_view, which rolls the read timestamp forward. After
+    # that call the patient counts as having read the current version, so a
+    # correction she has not actually seen would vanish on the very page load
+    # meant to show it — the same shape of defect as D-060.
+    corrections = delivery.corrections_for_patient(db, patient)
+
     since = touch_view(db, user_id=user_id, patient=patient)
 
     instructions = [e for e in entries if EntryType(e.type) is EntryType.PATIENT_INSTRUCTION]
@@ -600,6 +611,9 @@ def build_patient_glance(db: Session, *, user_id: str, patient: Patient) -> dict
             else sum(1 for e in entries if (_aware(e.timestamp) or _now()) > since)
         ),
         "labels": PATIENT_SECTION_LABELS,
+        # First in the payload and first on the page. If something she already
+        # acted on has changed, that outranks every other thing this view says.
+        "corrections": corrections,
         "next_steps": next_steps[:6],
         "updates": [
             {
