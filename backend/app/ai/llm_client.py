@@ -29,6 +29,27 @@ class PHILeakError(RuntimeError):
     """Raised when redacted text still contains unambiguous PHI. Fail closed."""
 
 
+class LLMUnavailableError(RuntimeError):
+    """The model could not be reached, or did not answer in time.
+
+    Deliberately distinct from PHILeakError. A leak is a safety stop and the
+    caller must not work around it. This is an availability failure, and each
+    caller decides for itself whether degrading is safe for its purpose — the
+    scribe falls back to deterministic extractive summarisation and labels the
+    result; a patient-facing generator would refuse instead.
+
+    Translating transport errors into one domain type here is what makes that
+    choice possible at all. Before this existed, an httpx error from a 503
+    propagated as an unhandled 500 and the caller never got to decide.
+    See DECISIONS.md D-070.
+    """
+
+    def __init__(self, reason: str, *, provider: str) -> None:
+        super().__init__(f"{provider} unavailable: {reason}")
+        self.reason = reason
+        self.provider = provider
+
+
 @dataclass
 class LLMResponse:
     text: str
@@ -84,23 +105,66 @@ class _AnthropicProvider:
         }
         if system:
             payload["system"] = system
-        response = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        text = "".join(block.get("text", "") for block in data.get("content", []))
+
+        # Every failure below becomes LLMUnavailableError so the caller can
+        # decide whether to degrade. Nothing here is allowed to escape as a
+        # raw httpx error: that is what turned a provider 503 into an
+        # unhandled 500 with a traceback.
+        try:
+            response = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=settings.llm_timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMUnavailableError(
+                f"no response within {settings.llm_timeout_seconds}s", provider=self.name
+            ) from exc
+        except httpx.HTTPError as exc:
+            # Transport-level: DNS, connection refused, TLS, read error.
+            raise LLMUnavailableError(type(exc).__name__, provider=self.name) from exc
+
+        if response.status_code >= 500 or response.status_code == 429:
+            # Retryable server-side conditions. Degrading is correct.
+            raise LLMUnavailableError(f"HTTP {response.status_code}", provider=self.name)
+        if response.status_code >= 400:
+            # 4xx is our bug — a bad key, a malformed request. Degrading would
+            # hide it behind a summary that looks merely lower quality, so this
+            # stays loud.
+            raise RuntimeError(f"{self.name} rejected the request: HTTP {response.status_code}")
+
+        try:
+            data = response.json()
+            text = "".join(block.get("text", "") for block in data.get("content", []))
+        except ValueError as exc:
+            raise LLMUnavailableError("unparseable response body", provider=self.name) from exc
         return text, 0.75
 
 
+class _UnavailableProvider:
+    """Simulates an outage. Enabled only by CARENOTE_LLM_FORCE_UNAVAILABLE.
+
+    The stub provider is in-process and cannot time out, refuse a connection or
+    return a 503, so for the whole build there was no way to observe what
+    happens when the model is down — and the answer turned out to be "an
+    unhandled 500". This exists so that path is exercised on every test run
+    rather than discovered in a clinic.
+    """
+
+    name = "unavailable"
+
+    def generate(self, system: str | None, prompt: str, model: str) -> tuple[str, float]:
+        raise LLMUnavailableError("forced outage (test hook)", provider=self.name)
+
+
 def _provider():
+    if settings.llm_force_unavailable:
+        return _UnavailableProvider()
     if settings.llm_provider == "anthropic":
         return _AnthropicProvider()
     return _StubProvider()
@@ -156,7 +220,19 @@ def complete(
         },
     )
 
-    text, confidence = provider.generate(redacted_system, result.text, chosen_model)
+    try:
+        text, confidence = provider.generate(redacted_system, result.text, chosen_model)
+    except LLMUnavailableError as exc:
+        # Metadata only, and recorded here rather than in the caller so every
+        # future caller gets the audit trail without having to remember.
+        log_event(
+            actor_id=actor_id,
+            action="llm.unavailable",
+            target_type="llm_request",
+            clinic_id=clinic_id,
+            metadata={"purpose": purpose, "provider": exc.provider, "reason": exc.reason},
+        )
+        raise
 
     return LLMResponse(
         text=text,

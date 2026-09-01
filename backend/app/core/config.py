@@ -30,6 +30,20 @@ class Settings:
     llm_provider: str = os.getenv("CARENOTE_LLM_PROVIDER", "stub")
     llm_model: str = os.getenv("CARENOTE_LLM_MODEL", "claude-sonnet-4-5")
 
+    # A consult summary that takes longer than this has already missed its
+    # consult. The previous value was 60s, which is not a timeout a clinician
+    # standing next to a patient can use — it is a timeout for a batch job.
+    # See DECISIONS.md D-070.
+    llm_timeout_seconds: float = float(os.getenv("CARENOTE_LLM_TIMEOUT_SECONDS", "8"))
+
+    # Test-only hook. Forces the provider to raise LLMUnavailableError so the
+    # degraded path can be exercised without an actual outage. Never set in
+    # normal operation; the stub provider cannot fail on its own, which is
+    # exactly why the outage path went unnoticed until it was asked about.
+    llm_force_unavailable: bool = (
+        os.getenv("CARENOTE_LLM_FORCE_UNAVAILABLE", "false").lower() == "true"
+    )
+
     # Hard safety switch: if True, llm_client refuses to send text that still
     # matches a PHI pattern after redaction, rather than sending it anyway.
     fail_closed_on_phi: bool = True

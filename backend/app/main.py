@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.db import Base, engine
+from app.core.errors import install_error_handlers
 from app.routes import (
     auth_routes,
     capture_routes,
@@ -74,6 +75,11 @@ async def add_response_time_header(request: Request, call_next):
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.2f}"
     return response
+
+
+# Registered last, so it is the outermost user middleware and therefore sees
+# failures raised inside the ones above it as well. Must stay last.
+install_error_handlers(app)
 
 
 @app.on_event("startup")

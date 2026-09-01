@@ -1805,3 +1805,89 @@ surface something the rules found clinically meaningless.
 collected on surfaced items, and a tag that never appears in any entry is never
 explored. A real answer needs off-policy evaluation against held-out charts,
 which needs data this build does not have.
+
+---
+
+## Phase 9 — addressing the clinic-scenario review
+
+### D-070 · An outage is a decision point for the caller, not a crash
+
+Scenarios 8 and 9. The build had a real extractive summariser and never ran it
+when it mattered: the fallback triggered when the model returned a **successful**
+response containing unparseable JSON, and a provider `503` raised
+`httpx.HTTPStatusError` straight through `run_scribe` to an unhandled 500. The
+degradation was wired to the wrong failure mode — the one where the model answers
+badly, not the one where it does not answer.
+
+Why it survived the whole build: `CARENOTE_LLM_PROVIDER` defaults to `stub`, and
+the stub is in-process. It cannot time out, refuse a connection or return a 503.
+Every test run, smoke script and demo executed against a provider physically
+incapable of failing. That default is still correct — it makes the build runnable
+without an API key and the tests deterministic — but it bought that determinism by
+removing the entire failure surface from view, and nothing made the trade visible.
+`_UnavailableProvider` plus `CARENOTE_LLM_FORCE_UNAVAILABLE` now puts it back, so
+the outage path runs on every test run.
+
+**The chokepoint translates, the caller decides.** `llm_client` converts timeouts,
+transport errors, 5xx and 429 into one `LLMUnavailableError`. It does not choose
+what to do about them. That belongs to each caller, because the right answer
+differs by purpose: the scribe degrades to the deterministic summariser, and a
+patient-facing generator would refuse outright (D-067). A blanket retry or a
+blanket fallback inside the chokepoint would take that judgment away from the only
+code that has the context to make it.
+
+**4xx stays loud.** A 400 or a 401 is our bug — a malformed request, a bad key.
+Degrading would hide it behind a summary that merely looks lower quality, and it
+would be indistinguishable from a real outage in the audit log.
+
+**A degraded note is labelled as degraded.** `model_used` is
+`offline-extractive-v1:provider-unavailable`, distinct from the plain
+`offline-extractive-v1` used when no model is configured at all. An unlabelled
+fallback is arguably worse than an error: the clinician reads a thinner summary
+with no way to know the model never ran.
+
+**Timeout 60s → 8s.** 60 seconds is a batch-job timeout. A clinician is standing
+next to a patient. A summary that takes longer than eight seconds has already
+missed the consult it was meant to support.
+
+**Known gap.** No circuit breaker: during a sustained outage, the 400th consult of
+the hour still waits the full timeout to learn what the first one learned.
+Bounded now rather than unbounded, but still paid per request.
+
+### D-071 · Failures are logged by type and reference, never by message
+
+Scenario 3. Redaction before the model was guarded carefully. The other exits were
+not. `main.py` had no exception handlers at all, so an unhandled error reached
+Starlette's default and uvicorn logged the full traceback — and SQLAlchemy embeds
+bound parameters in its exception messages:
+
+    [SQL: INSERT INTO versions ...]
+    [parameters: ('e1', 2, 'Amira Rahman, NRIC S8412345D, allergic to penicillin')]
+
+Name, NRIC and clinical content in one line, retained for as long as the container
+logs are, with no rotation and no scrubbing.
+
+`log_event` (D-014) makes it hard to log content **on purpose**. This is the other
+case: content logged on our behalf by code we did not write. The threat model was
+"a developer writes a careless `print()`". The real one was "a dependency logs
+content while nobody is calling your function at all."
+
+**Middleware, not `@app.exception_handler(Exception)`.** Starlette's
+`ServerErrorMiddleware` calls a registered handler and then *re-raises* so the ASGI
+server can log the traceback. A handler alone sanitises the response and leaves the
+log leak untouched. Catching inside the middleware stack means the exception never
+reaches `ServerErrorMiddleware` and uvicorn never prints it.
+
+**Type name and route only, never `str(exc)`** — the message is exactly where the
+parameters live. An eight-character reference goes to both the client and the log,
+so a clinician can quote it and an engineer can find the request without the log
+holding a patient.
+
+`PHILeakError` and `LLMUnavailableError` are named to the client because their
+messages are built from category names and carry no values, and because "nothing
+was sent to the model" and "the model is down" are different things a clinician
+should be able to tell apart. Everything else is opaque.
+
+**Known gap.** Uvicorn access logs still record request paths, which contain
+patient UUIDs. Pseudonymous rather than identifying, and unchanged by this work,
+but it is not nothing and there is still no retention policy.

@@ -315,26 +315,40 @@ def run_scribe(
     # --- summarise -------------------------------------------------------
     # The chokepoint. Redaction runs inside complete() as well; if anything
     # identifying survived, it raises rather than sending.
-    response = llm_client.complete(
-        redacted_transcript,
-        system=_SYSTEM_PROMPT,
-        gazetteer=gazetteer,
-        purpose=f"ai_scribe:{interaction_type}",
-        actor_id=actor_id,
-        clinic_id=patient.clinic_id,
-    )
+    try:
+        response = llm_client.complete(
+            redacted_transcript,
+            system=_SYSTEM_PROMPT,
+            gazetteer=gazetteer,
+            purpose=f"ai_scribe:{interaction_type}",
+            actor_id=actor_id,
+            clinic_id=patient.clinic_id,
+        )
+    except llm_client.LLMUnavailableError:
+        # The provider is down or too slow. The deterministic summariser below
+        # is the same one used when no model is configured at all, so there is
+        # a real summary either way — the clinician loses fluency, not the
+        # consult. The label says the model was unreachable, so a degraded note
+        # is legible as degraded rather than merely worse. The specific reason
+        # is in the audit log, recorded at the chokepoint. See DECISIONS.md D-070.
+        response = None
 
-    parsed = _parse_model_json(response.text)
-    if parsed and parsed.get("headline"):
-        summary = parsed
-        model_used = f"{response.provider}:{response.model}"
-        model_self_reported = _clamp_confidence(parsed.get("confidence"), None, default=None)
-    else:
-        # No live model, or the model did not return usable JSON. Same code
-        # path, deterministic summariser, and the model field says so.
+    if response is None:
         summary = _extractive_summary(redacted_transcript, interaction_type)
-        model_used = "offline-extractive-v1"
+        model_used = "offline-extractive-v1:provider-unavailable"
         model_self_reported = None
+    else:
+        parsed = _parse_model_json(response.text)
+        if parsed and parsed.get("headline"):
+            summary = parsed
+            model_used = f"{response.provider}:{response.model}"
+            model_self_reported = _clamp_confidence(parsed.get("confidence"), None, default=None)
+        else:
+            # No live model, or the model did not return usable JSON. Same code
+            # path, deterministic summariser, and the model field says so.
+            summary = _extractive_summary(redacted_transcript, interaction_type)
+            model_used = "offline-extractive-v1"
+            model_self_reported = None
 
     # Confidence is measured from the source, on both paths. A live model's own
     # number is kept for comparison but is never what the clinician sees.
