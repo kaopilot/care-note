@@ -126,10 +126,11 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 486 tests
+pytest tests/ -v                  # from the repository root — 509 tests
 ```
 
-486 tests, all passing, no API key or network required. Roughly 35 seconds.
+509 backend tests plus 44 frontend component tests, all passing, no API key or
+network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
 
@@ -142,7 +143,12 @@ pytest tests/test_self_learning_importance.py -v   # BONUS — adaptive prioriti
 pytest tests/test_voice_capture.py -v              # BONUS — ambient consult capture
 ```
 
-The five files from the clinic-scenario review:
+**Scenario coverage.** [`docs/SCENARIO_COVERAGE.md`](docs/SCENARIO_COVERAGE.md)
+maps all sixteen clinic scenarios and the twelve-capability list to the tests
+that cover them, each with a verdict. Current tally: **11 SURVIVES · 4 PARTIAL ·
+1 DOES NOT** on the scenarios, **6 · 5 · 1** on the capabilities.
+
+The files from the clinic-scenario review:
 
 ```bash
 pytest tests/test_failure_modes.py -v         # provider outage, crash-log hygiene, timeout
@@ -150,6 +156,8 @@ pytest tests/test_language_risk_floor.py -v   # risk floor parity across languag
 pytest tests/test_contradiction_denial.py -v  # allergy asserted in one entry, denied in another
 pytest tests/test_delivery_state.py -v        # written / read / corrected, and unreachable
 pytest tests/test_enrolment.py -v             # registering a patient who has only a phone number
+pytest tests/test_regeneration_and_dosage.py -v  # regeneration safety, dose reference checks
+pytest tests/test_capture_timing.py -v        # when the system learns of an early allergy
 ```
 
 Or by area:

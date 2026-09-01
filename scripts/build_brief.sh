@@ -18,8 +18,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$REPO_ROOT/docs/TECHNICAL_BRIEF.md"
-OUT="$REPO_ROOT/docs/TECHNICAL_BRIEF.pdf"
+# Which brief to render. Defaults to the architecture brief; pass a name to
+# render the round-two response instead:
+#
+#   ./scripts/build_brief.sh                # TECHNICAL_BRIEF
+#   ./scripts/build_brief.sh BRIEF_ROUND2   # the clinic-scenario response
+#
+# Both must land in 2-3 pages, which is why the page check below is not
+# parameterised alongside the filename.
+BRIEF="${1:-TECHNICAL_BRIEF}"
+SRC="$REPO_ROOT/docs/$BRIEF.md"
+OUT="$REPO_ROOT/docs/$BRIEF.pdf"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -98,4 +107,4 @@ if [ "$PAGES" -lt 2 ] || [ "$PAGES" -gt 3 ]; then
 fi
 
 cp "$WORK/final.pdf" "$OUT"
-echo "docs/TECHNICAL_BRIEF.pdf rebuilt — $PAGES pages."
+echo "docs/$BRIEF.pdf rebuilt — $PAGES pages."

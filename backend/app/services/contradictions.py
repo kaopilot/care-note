@@ -96,6 +96,16 @@ _ADMINISTRATION_CUES = (
     r"administered",
     r"given",
     r"dispensed",
+    # "start you on", "put her on", "switch him to" — how prescribing is
+    # actually said out loud, as opposed to how it is written in a note. Found
+    # by writing the scenario-7 test against a spoken transcript rather than a
+    # typed one: "I will start you on amoxicillin" classified as a bare dose
+    # claim and never reached the allergy comparison (D-080).
+    r"start(?:ing)?\s+(?:you|him|her|them|the patient)\s+on",
+    r"put(?:ting)?\s+(?:you|him|her|them|the patient)\s+on",
+    r"switch(?:ing)?\s+(?:you|him|her|them|the patient)?\s*(?:to|onto)",
+    r"i'?ll\s+start",
+    r"we'?ll\s+start",
     r"take",
     r"taking",
     r"continue",
@@ -379,10 +389,15 @@ def _compare(left: _Claim, right: _Claim):
         return None
 
     # 1. Allergy against administration — same drug, or same drug class.
-    if left.kind == "allergy" and right.kind in {"administration", "start"}:
+    # `dose` counts as administration here. A drug written with a dose and no
+    # verb — "Metformin 1g BD" — is how half of real notes record a medication,
+    # and a patient being allergic to it is the same danger whether or not
+    # someone wrote "prescribed" in front of it (D-080).
+    _GIVEN = {"administration", "start", "dose"}
+    if left.kind == "allergy" and right.kind in _GIVEN:
         if same_drug or same_class:
             return _allergy_finding(left, right, same_drug, flip=False)
-    if right.kind == "allergy" and left.kind in {"administration", "start"}:
+    if right.kind == "allergy" and left.kind in _GIVEN:
         if same_drug or same_class:
             return _allergy_finding(right, left, same_drug, flip=True)
 

@@ -223,3 +223,148 @@ about it."*
 - Demo cross-clinic refusal in the UI — it is an API property. If asked, run
   `python scripts/phase1_smoke.py`.
 - Apologise for the stub recogniser more than once.
+
+---
+
+# Round two — the clinic scenarios (~5 min)
+
+Record this as a **second segment** after the three original scenarios rather
+than reworking them. The reviewers asked to see as many of 1–16 as possible, and
+these five sequences cover eleven of them without repeating what Scenarios A–C
+already show.
+
+Keep the same discipline: say the verdict, show the thing, move on. Where a
+scenario does **not** survive, say so on camera — that is the answer they asked
+for, and claiming otherwise is the only thing that counts against us.
+
+## R1 — The provider is down (scenarios 9, 8) · ~60s
+
+```bash
+# stop the server, restart with the outage flag on
+CARENOTE_LLM_FORCE_UNAVAILABLE=true uvicorn app.main:app
+```
+
+Click **Doctor consult** under *Capture a consult*.
+
+> "The model provider is returning errors. The clinician still gets a summary —
+> it is rule-derived, and the card says so: `offline-extractive-v1:provider-unavailable`.
+> The degradation is visible rather than silent, which matters more than the
+> degradation being invisible."
+
+Point at the **Cancel** button on the processing card while it runs.
+
+> "The server timeout is eight seconds, down from sixty. Sixty is a batch-job
+> timeout; a clinician is standing next to a patient. Cancelling is safe because
+> the transcript is written before the model is called — you lose the summary,
+> never the consult."
+
+**Say the gap:** aborting the browser request does not cancel the server-side
+call. Bounded, not free.
+
+## R2 — Read the logs (scenario 3) · ~45s
+
+Show the terminal running the server, then in another tab hit a route that fails.
+
+> "This was our worst finding and it had no clinician-visible symptom at all.
+> SQLAlchemy puts bound parameters in its exception messages, so one unhandled
+> 500 wrote a patient name, an NRIC and note content into a single log line.
+> Now: exception type, route, and a reference id. Nothing else."
+
+Show the response body carrying the same reference.
+
+> "The clinician quotes the reference, an engineer finds the request, and the log
+> never held a patient. Three tests fail if that middleware is removed."
+
+## R3 — Allergy asserted and denied (scenarios 13, 6, 14) · ~90s
+
+On Amira's chart, point at **Unreconciled contradictions** at the top of the card.
+
+> "A nurse recorded a penicillin allergy. The patient told the AI she has no
+> known allergies. Both are in the timeline. Before this round the system found
+> **zero** contradictions here — the guard that stops 'denies allergy to aspirin'
+> becoming a false alarm was also throwing away the patient's denial."
+
+Click through to both source entries.
+
+> "It fires at high, not critical. Nothing dangerous has happened yet — the safe
+> action is already the one being taken. Critical is reserved for *about to be
+> given a drug they react to*, and diluting it would break the level that
+> matters. The system reports and does not resolve: there is no precedence rule
+> between a nurse's note and a patient's own account."
+
+Then scroll to an AI summary with the **unread-content** flag.
+
+> "Part of this consult was in Hokkien. We cannot read it, and rather than
+> producing nothing and looking confident, the card says so. Separately, the risk
+> floor used to be English-only — Malay chest pain rated medium where English
+> rated high. It now works on canonical tags, so the floor speaks every language
+> the tagger does."
+
+## R4 — The dose gate and regeneration (capabilities, scenario 12) · ~90s
+
+As `clinician_a`, compose a **patient instruction**: `Take metformin 5000mg once daily.`
+
+> "This is going to a patient, and patient-facing content is a higher severity
+> class. Nothing was saved. It names the drug, the figure written and the
+> expected adult range, so a clinician can tell a typo from a decision in one
+> read."
+
+Point at the buttons.
+
+> "Going back is the primary action; confirming is secondary. A dialog whose
+> obvious button says *proceed* is a speed bump, not a gate. And it says the
+> confirmation is recorded — knowing an override is attributable to you is most
+> of what makes someone stop and reread."
+
+Correct it to `500mg` and save. Then open an **AI-scribed** entry and click
+**Regenerate summary**.
+
+> "Regeneration reuses the entry, so accepted highlights, comments and tasks
+> survive. And if a clinician had edited this summary, it refuses outright —
+> merging would mean choosing which of their sentences to keep, and that is a
+> clinical judgement the system has no standing to make."
+
+If time allows, edit the AI note first and click regenerate to show the refusal.
+
+## R5 — Reach, staleness, and enrolment (scenarios 11, 12, 16, 1) · ~90s
+
+Edit a patient instruction the patient has already read. Return to the Glance
+View and point at **Not yet reached the patient**.
+
+> "Corrected, not seen. She read the earlier version and is possibly acting on
+> it. There is no sender in this build — no email, no SMS — so `dispatched` is
+> deliberately not a state we model. A build that cannot send is a limitation. A
+> build that cannot tell you it did not send is a false assurance."
+
+Switch to the `patient_a` tab and reload.
+
+> "Above everything else, in plain language: this was updated after you last read
+> it, stop and read this one. And it is computed before the read marker moves, or
+> it would vanish on the page load meant to show it."
+
+Back on the clinician view, find a stale highlight.
+
+> "The source note changed after this was highlighted — v2 to v5. Left is what
+> the clinician actually confirmed; right is what now sits at those coordinates.
+> Showing only the right-hand side would be a quiet lie about what was confirmed."
+
+Close on enrolment.
+
+> "And the patient who is only a phone number in a WhatsApp thread: staff can
+> register her and issue a login here. There is no email field anywhere in this
+> schema. What was missing was not the identity model — it was that only a
+> developer running a script could create the row."
+
+## Closing line
+
+> "Sixteen scenarios: eleven survive, four partial, one does not. Streaming
+> capture does not — an allergy at minute two is known when the consult ends, and
+> the test asserts that boundary rather than papering over it. The fix is
+> tractable; the part we could not resolve is when it is acceptable to interrupt
+> a doctor mid-sentence, and that wants a clinician rather than an engineer."
+
+## Do not, in this segment
+
+- Do not claim streaming, diarization or a real drug database. None exist.
+- Do not skip the gaps. The verdict spread is the point.
+- Do not run over. Five minutes; the first segment already carries the product.
