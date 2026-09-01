@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (486 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (509 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -522,6 +522,11 @@ an undisclosed gap has reason to wonder what else was not mentioned.
 | Patient enrolment | Staff can register a patient and issue a login; a phone number is a first-class identifier (D-075) |
 
 ### Phase 9 — changes made after the clinic-scenario review
+
+**Scenario verdicts: 11 SURVIVES · 4 PARTIAL · 1 DOES NOT** (was 6 · 6 · 4).
+**Capabilities: 6 · 5 · 1.** Per-row detail and the tests behind each verdict:
+[`docs/SCENARIO_COVERAGE.md`](docs/SCENARIO_COVERAGE.md). The written response is
+[`docs/BRIEF_ROUND2.md`](docs/BRIEF_ROUND2.md).
 
 The reviewers supplied sixteen scenarios drawn from real clinic operations and
 asked for a self-assessment. Working through them produced six new decisions
