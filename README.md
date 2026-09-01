@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (509 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (572 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -126,10 +126,10 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 509 tests
+pytest tests/ -v                  # from the repository root — 572 tests
 ```
 
-509 backend tests plus 44 frontend component tests, all passing, no API key or
+572 backend tests plus 49 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -601,6 +601,14 @@ README exists not to do.
 - **No token refresh, rotation or revocation.** Logout clears the cookie; a
   token copied elsewhere stays valid until it expires (60 minutes).
 - **No login rate limiting.**
+- **The access log is unrotated and unscrubbed.** Uvicorn records the full
+  request line before the application sees it, and identically for requests that
+  404 or are refused by RBAC — so neither the audit logger nor the sanitised
+  error middleware covers it. Patient and entry UUIDs are in there. They are
+  pseudonymous and meaningless outside this database, but there is no retention
+  policy and nothing rotates them. `tests/test_url_surface.py` now enforces that
+  nothing worse than a UUID can reach a URL; it found a patient phone number in a
+  query string when it was written (D-083).
 - **No TLS and no encryption at rest locally.** Both are documented decisions
   that terminate at the proxy and storage layer in production, not implemented
   here.

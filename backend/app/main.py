@@ -93,4 +93,6 @@ def on_startup() -> None:
 
 @app.get("/health", tags=["meta"])
 def health() -> dict:
-    return {"status": "ok", "service": "care-note", "phase": "5"}
+    # No phase number here. It said "5" four phases after Phase 5 shipped,
+    # because a hand-maintained version string is a claim nothing checks.
+    return {"status": "ok", "service": "care-note"}

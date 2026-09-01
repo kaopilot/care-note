@@ -9,8 +9,8 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 509 backend
-cd frontend && npm test   # 44 component
+pytest tests/ -q          # 572 backend
+cd frontend && npm test   # 49 component
 ```
 
 ---
@@ -21,26 +21,32 @@ cd frontend && npm test   # 44 component
 |---|---|---|---|
 | 1 | Patient with no email | **SURVIVES** | `test_enrolment.py` (10) — phone as username, login issued and used, permissive validation |
 | 2 | Clinic isolation, one line | **SURVIVES** | `test_rbac_scope.py`, `test_phase1_cross_clinic.py`, `test_rbac_pattern.py` |
-| 3 | Read your logs | **SURVIVES** | `test_failure_modes.py::test_crash_log_carries_no_patient_data` and siblings — all three fail without the middleware |
+| 3 | Read your logs | **PARTIAL** | `test_failure_modes.py` (crash logs), `test_url_surface.py` (52) — a phone number was in a query string until D-083; access log still unrotated |
 | 4 | Prove the ordering | **SURVIVES** | `test_llm_chokepoint.py` (no other module may reach a model), `test_redaction.py` |
 | 5 | Clinic B on Monday | **PARTIAL** | `test_phase1_cross_clinic.py`, `test_enrolment.py`. No per-clinic config exists — see below |
 | 6 | Trilingual consult | **PARTIAL** | `test_language_risk_floor.py` (13), `test_multilingual_features.py` |
 | 7 | Allergy at minute two | **DOES NOT** | `test_capture_timing.py` (3) — pins the batch boundary deliberately |
 | 8 | Model hangs 45s | **PARTIAL** | `test_failure_modes.py::test_timeout_is_short_enough_for_a_consult` |
-| 9 | Provider 503 for an hour | **SURVIVES** | `test_failure_modes.py` — degraded summary produced and labelled |
+| 9 | Provider 503 for an hour | **SURVIVES** | `test_failure_modes.py`, `EntryCard.degraded.test.jsx` — degraded, and visibly so since D-082 |
 | 10 | Two people, same note | **SURVIVES** | `test_concurrent_edits.py` |
 | 11 | Link never received | **PARTIAL** | `test_delivery_state.py` (9) — reach modelled; there is no sender |
 | 12 | Patient summary wrong by one dosage | **SURVIVES** | `test_delivery_state.py` (correction path), `test_regeneration_and_dosage.py` (the gate) |
-| 13 | Allergy asserted vs denied | **SURVIVES** | `test_contradiction_denial.py` (11) |
+| 13 | Allergy asserted vs denied | **SURVIVES** | `test_contradiction_denial.py` (11), `test_contradiction_grouping.py` (6) — one disagreement is one card since D-081 |
 | 14 | A number that means nothing | **SURVIVES** | `test_evaluation_and_abstention.py`, `test_language_risk_floor.py` |
 | 15 | Ranking learns from what it showed | **SURVIVES** | `test_self_learning_importance.py` |
 | 16 | Highlight cites edited source | **SURVIVES** | `test_highlight_provenance.py`, `Phase9Surfaces.test.jsx` (side-by-side) |
 
-**Tally: 11 SURVIVES · 4 PARTIAL · 1 DOES NOT.**
+**Tally: 10 SURVIVES · 5 PARTIAL · 1 DOES NOT.**
 
-The three that moved furthest — 3, 9 and 13 — were all DOES NOT in the first
-assessment. Scenario 7 stayed put, and the test for it asserts the limitation
-rather than papering over it.
+Scenario 3 moved **back**, from SURVIVES to PARTIAL, after a self-audit found a
+patient's phone number travelling in a query string and therefore into the
+access log (D-083). It was fixed and the convention is now a tested invariant,
+but the log is still unrotated and unscrubbed, and the earlier SURVIVES was an
+overclaim: it had been assessed against the crash path only. Downgrading it is
+the honest read.
+
+Scenario 7 stayed put, and the test for it asserts the limitation rather than
+papering over it.
 
 ---
 
@@ -64,6 +70,33 @@ rather than papering over it.
 **Tally: 6 SURVIVES · 5 PARTIAL · 1 DOES NOT.**
 
 ---
+
+## What re-auditing our own answers found
+
+Three defects, all inside rows we had already marked SURVIVES, all found by
+probing a running instance with a realistic chart rather than by the test suite.
+That is the pattern worth reporting: **each one was invisible to its own tests
+because the tests used the minimal shape of the case.**
+
+1. **Contradictions fanned out N×M** (D-081). Every test used one assertion and
+   one denial — the single shape where pairwise and grouped output are
+   identical. A real chart re-records an allergy at every visit. Four
+   assertions against two denials produced eight cards, which filled the
+   five-card cap and evicted an unrelated metformin dose disagreement from the
+   Glance View entirely. A real conflict made invisible by a different one being
+   mentioned often, getting worse the longer the record grew.
+2. **Degradation was legible to an auditor, not a clinician** (D-082). The
+   outage label lived only in `ai_model_used`, rendered as a 10px grey
+   monospace string in the provenance footer. The data was right and the card
+   read like an ordinary AI summary.
+3. **A phone number in a query string** (D-083). The enrolment route built for
+   scenario 1 put the patient's phone number in the URL, and the access log
+   records the full request line before the application sees it. Scenario 1's
+   answer leaking through scenario 3's door.
+
+The third is why scenario 3 is now PARTIAL rather than SURVIVES. It was assessed
+against the crash path, which was the door we had just finished guarding, and
+not against the sink that logs every request whether or not our code runs.
 
 ## The four that would move next
 

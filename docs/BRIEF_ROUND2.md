@@ -6,9 +6,14 @@ Architecture, schema and latency are unchanged and remain in
 Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
-**Where we landed: 11 SURVIVES · 4 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Eleven decisions (D-070 to D-080), 74 new
-tests, 509 backend and 44 component tests passing.
+**Where we landed: 10 SURVIVES · 5 PARTIAL · 1 DOES NOT** on the scenarios, from
+6 · 6 · 4 in our own first assessment. Fourteen decisions (D-070 to D-083), 137
+new tests, 572 backend and 49 component tests passing.
+
+One row moved backwards. Scenario 3 was SURVIVES and is now PARTIAL, because
+re-auditing our own answer found a patient's phone number travelling in a query
+string and therefore into the access log. Section 7 covers that and the two
+other defects the re-audit found inside rows we had already claimed.
 
 ## 1. What the review actually found
 
@@ -43,17 +48,17 @@ missing — which is exactly scenario 1.
 |---|---|---|---|
 | 1 | Patient with no email | PARTIAL | **SURVIVES** — staff enrolment, phone as identifier |
 | 2 | Clinic isolation, one line | SURVIVES | **SURVIVES** — `AccessScope.query()`, three test files |
-| 3 | Read your logs | DOES NOT | **SURVIVES** — sanitised middleware; 3 tests fail without it |
+| 3 | Read your logs | DOES NOT | **PARTIAL** — crash path fixed; a URL leak found later (§7) |
 | 4 | Prove the ordering | SURVIVES | **SURVIVES** — one exit, asserted by source scan |
 | 5 | Clinic B on Monday | PARTIAL | **PARTIAL** — enrolment built; per-clinic config still absent |
 | 6 | Trilingual consult | PARTIAL | **PARTIAL** — parity for en/ms; Hokkien flagged, not read |
 | 7 | Allergy at minute two | DOES NOT | **DOES NOT** — batch; boundary asserted by test |
 | 8 | Model hangs 45s | PARTIAL | **PARTIAL** — 8s timeout and cancel; no server-side abort |
-| 9 | Provider 503 for an hour | DOES NOT | **SURVIVES** — degrades to extractive, labelled |
+| 9 | Provider 503 for an hour | DOES NOT | **SURVIVES** — degrades to extractive, and the card says so |
 | 10 | Two people, same note | SURVIVES | **SURVIVES** — version check plus unique constraint |
 | 11 | Link never received | DOES NOT | **PARTIAL** — reach modelled; no sender exists |
 | 12 | Summary wrong by one dosage | PARTIAL | **SURVIVES** — correction banner and a dose gate |
-| 13 | Allergy asserted vs denied | PARTIAL | **SURVIVES** — `assertion_vs_denial` at HIGH |
+| 13 | Allergy asserted vs denied | PARTIAL | **SURVIVES** — `assertion_vs_denial` at HIGH, one card per disagreement |
 | 14 | A number that means nothing | SURVIVES | **SURVIVES** — floor now language-independent |
 | 15 | Ranking learns from what it showed | SURVIVES | **SURVIVES** — floors, exploration, inspectable |
 | 16 | Highlight cites edited source | SURVIVES | **SURVIVES** — now side by side, both versions named |
@@ -186,3 +191,59 @@ visibility (D-004); and reporting contradictions without ever resolving them
 sender, per-clinic configuration, presence indicators, and a real drug database.
 Scenario 7 remains DOES NOT and `test_capture_timing.py` asserts that boundary
 rather than papering over it.
+
+## 7. Re-auditing our own answers
+
+Everything above was written, then the build was probed again as if by someone
+trying to disprove it. Three defects came out, **all inside rows already marked
+SURVIVES**, and none caught by the 509 tests passing at the time.
+
+The common cause is worth more than the individual fixes: **each test used the
+minimal shape of the case it was testing**, and the minimal shape is the one
+where the bug cannot appear.
+
+**Contradictions fanned out N×M (D-081).** Every contradiction test used one
+assertion and one denial. That is the single shape where pairwise output and
+grouped output are identical. A real chart re-records an allergy at every visit,
+so four "allergic to penicillin" entries against two "no known allergies"
+entries produce eight findings that all say one thing. The Glance View caps the
+list at five, so the copies filled the cap and an unrelated **metformin dose
+disagreement was evicted from the card entirely** — a real unresolved conflict
+made invisible by a different one being mentioned more often, degrading as the
+record grew. Detection stays pairwise; the display unit is now `(kind, subject)`
+and every supporting entry keeps its own pointer, because a card reading "and 7
+others" without links would trade an alert-fatigue problem for a provenance one.
+
+**Degradation was legible to an auditor, not a clinician (D-082).** Section 3
+claimed a degraded note is "legible as degraded." True of the database. In the
+interface the only trace was `ai_model_used` rendered as a 10px grey monospace
+string in the provenance footer, next to the pointer — a machine-facing
+identifier in the place on the card a clinician looks least. During an hour-long
+outage the card read as an ordinary AI summary. `ai_degraded` is now a wire
+field with a chip in the existing vocabulary, kept deliberately separate from
+the confidence signal: "the model was unsure" and "no model read this consult"
+call for different responses.
+
+**A phone number in a query string (D-083).** `POST /patients/{id}/login` took
+the patient's identifier as a query parameter. For scenario 1 that identifier
+*is* a phone number. The ASGI access log records the full request line — path
+and query — before the application sees the request, and identically for
+requests that 404 or are refused by RBAC, so neither `log_event` nor the
+sanitised error middleware touches it. **The feature built to answer scenario 1
+leaked through the door scenario 3 asks about.**
+
+That last one is why scenario 3 is now PARTIAL. Our answer had been assessed
+against the crash path — the door we had just finished guarding — and not
+against the sink that logs every request whether or not our code runs. The
+parameter moved into the request body, and `tests/test_url_surface.py` now
+asserts across every route that path and query parameters come from an explicit
+allowlist of opaque ids, enums and structural pointers, with a second test
+asserting the allowlist itself stays free of PHI-shaped names so the invariant
+cannot be satisfied by quietly widening it.
+
+**What this says about the rest of the table.** Three overclaims in rows we had
+tested and believed, found in one pass. We would expect a fourth to exist. The
+rows we would probe next are 12 and 15 — the dosage gate has only ever been
+exercised against drugs the 17-entry table knows, and the learning loop's
+`NEVER_DAMPENED` floors have never been tested against a clinic that dismisses
+at a realistic rate over months rather than in a simulated burst.
