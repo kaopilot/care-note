@@ -103,18 +103,6 @@ _SYSTEM_PROMPT = (
 # Terms that push an inferred risk level up. Deliberately conservative: the
 # scribe proposes, the clinician disposes, and over-flagging a Glance View is
 # how it stops being read.
-_HIGH_RISK_TERMS = (
-    "chest pain",
-    "bleeding",
-    "melaena",
-    "syncope",
-    "collapse",
-    "suicidal",
-    "self-harm",
-    "anaphylaxis",
-    "sepsis",
-    "haemoptysis",
-)
 _MEDIUM_RISK_TAG_PREFIXES = ("symptom:", "finding:", "entity:allergy")
 
 
@@ -218,8 +206,12 @@ def _extractive_summary(redacted_transcript: str, interaction_type: InteractionT
 
 
 def _infer_risk(text: str) -> str:
-    lowered = text.lower()
-    if any(term in lowered for term in _HIGH_RISK_TERMS):
+    """The deterministic floor. A model may raise this; it may never lower it.
+
+    Works in canonical tag space, so it inherits every language the tagger
+    knows rather than only English (D-072).
+    """
+    if features.high_risk_tags(text):
         return str(RiskLevel.HIGH)
     tags, _ = features.tag_span(text)
     if any(tag.startswith(prefix) for tag in tags for prefix in _MEDIUM_RISK_TAG_PREFIXES):
@@ -293,10 +285,15 @@ def run_scribe(
     # --- redact, then store segments already redacted --------------------
     redaction_count = 0
     redacted_lines: list[str] = []
+    # Turns the vocabulary could not read. Counted on the redacted text, since
+    # that is what every downstream feature actually sees.
+    unreadable_count = 0
     for index, turn in enumerate(turns):
         result = redact_phi_detailed(turn.text, gazetteer=gazetteer)
         redaction_count += result.replacements
         redacted_lines.append(f"{turn.speaker}: {result.text}")
+        if features.is_unreadable(result.text, turn.language):
+            unreadable_count += 1
         db.add(
             TranscriptSegment(
                 session_id=session_id,
@@ -409,6 +406,7 @@ def run_scribe(
             confidence=confidence,
             model_self_reported_confidence=model_self_reported,
             risk_floor_applied=risk_floor_applied,
+            unreadable_segment_count=unreadable_count,
             model_proposed_risk=str(model_risk),
         )
     )

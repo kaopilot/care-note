@@ -421,7 +421,35 @@ def _confidence_flags(entries: list[Entry], ai_notes: dict) -> list[dict]:
     out = []
     for entry in entries:
         note = ai_notes.get(entry.id)
-        if note is None or note.confidence is None:
+        if note is None:
+            continue
+
+        # Content the vocabulary could not read at all. Distinct from low
+        # confidence: a low-confidence summary means "the system read this and
+        # is unsure", and this means "the system did not read part of this".
+        # Silence on an unread turn is indistinguishable, from the clinician's
+        # side, from there having been nothing to say (D-072).
+        if getattr(note, "unreadable_segment_count", 0):
+            count = note.unreadable_segment_count
+            out.append(
+                {
+                    "entry_id": entry.id,
+                    "type": str(entry.type),
+                    "title": entry.title,
+                    "confidence": None,
+                    "confidence_band": "unread",
+                    "label": (
+                        f"{count} part{'s' if count > 1 else ''} of this consult "
+                        "were in a language the system cannot read — open the "
+                        "transcript"
+                    ),
+                    "session_id": note.session_id,
+                    "model_used": note.model_used,
+                    "timestamp": iso_utc(entry.timestamp),
+                }
+            )
+
+        if note.confidence is None:
             continue
         if note.confidence >= LOW_CONFIDENCE_THRESHOLD:
             continue

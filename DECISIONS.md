@@ -1891,3 +1891,74 @@ should be able to tell apart. Everything else is opaque.
 **Known gap.** Uvicorn access logs still record request paths, which contain
 patient UUIDs. Pseudonymous rather than identifying, and unchanged by this work,
 but it is not nothing and there is still no retention policy.
+
+### D-072 · The risk floor works in tag space, and says so when it cannot read
+
+Scenarios 6 and 14. Two defects with one cause.
+
+`_infer_risk` matched a tuple of **English phrases** against raw text and only
+fell through to `tag_span` afterwards. So the tagger was bilingual (D-058) and
+the deterministic safety floor sitting on top of it was not. Measured before the
+fix:
+
+    "chest pain when I walk uphill"   -> high
+    "sakit dada bila naik tangga"     -> medium
+
+The same symptom rated lower because of the language the patient used. The
+mechanism I am most confident about — a floor a model cannot lower — was
+language-dependent, and the reason is worth naming: **D-058 fixed the assumption
+at the tagger and nothing went looking for other layers that shared it.** The
+floor was a separate code path making the same English-only assumption, and the
+Malay fixtures all passed because they only ever exercised the tagger.
+
+`HIGH_RISK_TAGS` is now a set of canonical tags, so the floor inherits every
+language the tagger knows, now and whenever the vocabulary grows. Adding a
+language becomes one change instead of two, and the second one can no longer be
+forgotten.
+
+It also surfaced a defect that had nothing to do with language: `fainted` was
+absent from the old English list, so "she fainted at the bus stop" rated medium
+in English too. `symptom:fainted` is in the tag set; syncope and fainting are the
+same event and patients use the second word.
+
+**Negation, asymmetrically.** The floor had no negation handling, so "denies
+chest pain, no shortness of breath" — a clean history — rated high. That fails
+loud rather than silent, which is the right direction, but alert fatigue is the
+mechanism by which loud failures become silent ones. A symptom is now dropped
+only if it appears *exclusively* inside a negation: one un-negated mention
+anywhere sets the floor, because "no chest pain Monday, chest pain today" must
+rate high. A denied symptom is downgraded to medium, never dropped — a pertinent
+negative is still clinical content.
+
+`NEGATION_RE` moved to `features.py` and `contradictions.py` imports it. Two
+copies of a negation rule drift, and the two consumers would then disagree about
+whether the same sentence asserts something.
+
+**Abstention over silence.** Romanised Hokkien is transcribed faithfully, stored,
+and then produces no tags, no risk level, no highlight and no card. The words sit
+in the timeline where a human could read them, and the Glance View is silent
+about the reason for the visit — silent *confidently*, with nothing to indicate
+the tagger did not understand the language it was given.
+
+The fix is not more vocabulary. That is an arms race this build loses, and every
+round of it leaves the same failure mode intact for the next language.
+`is_unreadable()` flags a turn that is substantive, produced no tags, **and** is
+in a language outside the supported set, and the Glance View says so plainly.
+Deliberately conservative on all three conditions: English small talk produces no
+tags either and is not a gap in understanding.
+
+The flag is separate from the low-confidence flag, for the same reason
+`confidence_flags` is separate from `risk_flags`: "the system read this and is
+unsure" and "the system did not read part of this" are different warnings and a
+clinician acts on them differently.
+
+A romanised Hokkien turn is now in the doctor-consult transcript and the clinical
+capture fixture. Without a fixture the gap is invisible in every test and every
+demo, which is exactly how it survived the original build.
+
+**Known gaps.** Language identification is taken from the ASR provider's tag and
+is not verified — a recogniser that mislabels Hokkien as English produces no flag.
+Nothing yet flags *untagged* content in a supported language, which is the
+larger recall gap. `unreadable_segment_count` is a new column; `create_all` does
+not migrate an existing SQLite file, so a dev database from before this commit
+needs re-seeding.

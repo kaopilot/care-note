@@ -125,8 +125,16 @@ _CLINICAL_CAPTURE: tuple[Turn, ...] = (
     Turn("patient", "About four days. The swelling is worst at night — malam paling "
                     "sakit. Cannot sleep properly.", 9800, 17200, 0.62, "en-ms"),
     Turn("clinician", "Any redness, any fever?", 17200, 19400, 0.95, "en"),
+    # Romanised Hokkien, code-switched. Ordinary for an older patient in this
+    # region, and the build has no vocabulary for it: this turn is transcribed
+    # and stored faithfully and then produces no tags, no risk level and no
+    # card. It is here so that the "content I could not read" flag has
+    # something real to fire on, rather than the gap being invisible in every
+    # fixture and therefore in every demo. See D-072.
+    Turn("patient", "Bo lah, bo sio joah. Ka joah tioh e kha there thiam thiam, "
+                    "bo hoat tou khun.", 19400, 22600, 0.48, "nan"),
     Turn("patient", "No fever. But the skin over the swelling feels tight, like mahu "
-                    "pecah.", 19400, 25100, 0.54, "en-ms"),
+                    "pecah.", 22600, 25100, 0.54, "en-ms"),
     Turn("clinician", "Are you still on the amlodipine five milligrams?",
          25100, 28900, 0.88, "en"),
     Turn("patient", "Yes, every morning. Never miss.", 28900, 31600, 0.9, "en"),

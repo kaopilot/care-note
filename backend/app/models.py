@@ -280,6 +280,12 @@ class AIScribedNote(Base):
     # True when deterministic rules raised the risk level above what the model
     # proposed. Makes "why does this say high?" answerable from the row (D-066).
     risk_floor_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Transcript turns that carried clinical weight but produced no tags,
+    # because they were in a language this build has no vocabulary for. Stored
+    # rather than recomputed so the Glance View does not re-tag a transcript on
+    # every load, and so the number is auditable after the fact. See D-072.
+    unreadable_segment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # The level the model asked for, kept whether or not it was honoured.
     model_proposed_risk: Mapped[str | None] = mapped_column(String(20), nullable=True)
 

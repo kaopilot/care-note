@@ -104,6 +104,119 @@ RED_FLAG_TERMS: dict[str, str] = {
 
 ALLERGY_TERMS: tuple[str, ...] = ("allergy", "allergic", "anaphylaxis", "intolerance", "rash to")
 
+# --------------------------------------------------------------------------
+# The high-risk floor
+# --------------------------------------------------------------------------
+# Canonical *tags*, not English strings. The floor used to be a tuple of English
+# phrases matched against raw text, checked before `tag_span` ever ran — so the
+# tagger spoke Malay and the safety floor did not. Measured, before the fix:
+#
+#     "chest pain when I walk uphill"        -> high
+#     "sakit dada bila naik tangga"          -> medium
+#
+# The same symptom rated lower because of the language the patient used. Working
+# in tag space means the floor inherits every language the tagger knows, now and
+# whenever the vocabulary grows (D-072).
+HIGH_RISK_TAGS: frozenset[str] = frozenset(
+    {
+        "symptom:chest_pain",
+        "symptom:bleeding",
+        "symptom:melaena",
+        "symptom:haemoptysis",
+        "symptom:syncope",
+        "symptom:collapse",
+        # `fainted` is clinically the same event as syncope and is the word
+        # patients actually use. It was missing from the old English list, so
+        # "she fainted" rated medium in English too — this was never only a
+        # multilingual gap.
+        "symptom:fainted",
+        "symptom:suicidal",
+        "symptom:self-harm",
+        "symptom:anaphylaxis",
+        "symptom:sepsis",
+    }
+)
+
+# One definition, imported by app.services.contradictions. Two copies of a
+# negation rule drift, and the two consumers would then disagree about whether
+# the same sentence asserts something.
+NEGATION_RE = re.compile(r"\b(no|not|never|deni(?:es|ed)|avoid|without|nil)\b[^.;]{0,40}$", re.I)
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.;!?])\s+")
+
+# Languages whose clinical vocabulary this build actually has. Anything else is
+# transcribed and stored faithfully and then understood by nothing downstream.
+SUPPORTED_LANGUAGES: frozenset[str] = frozenset({"en", "ms", "en-ms", "ms-en"})
+
+# Below this, a turn is "mm-hm" or "okay" and carries no clinical content, so an
+# empty tag list means nothing is wrong.
+_SUBSTANTIVE_WORDS = 6
+
+
+def _term_to_high_risk_tag() -> dict[str, str]:
+    """Every surface term, in any supported language, that maps to a high tag."""
+    mapping: dict[str, str] = {}
+    for term in RED_FLAG_TERMS:
+        tag = f"symptom:{term.replace(' ', '_')}"
+        if tag in HIGH_RISK_TAGS:
+            mapping[term] = tag
+    for malay_term, english_key in MALAY_CLINICAL_TERMS.items():
+        tag = f"symptom:{english_key.replace(' ', '_')}"
+        if tag in HIGH_RISK_TAGS:
+            mapping[malay_term] = tag
+    return mapping
+
+
+def high_risk_tags(text: str) -> list[str]:
+    """High-risk tags *asserted* in `text`, ignoring ones only ever denied.
+
+    Negation handling is deliberately asymmetric. A single un-negated mention
+    anywhere sets the floor, even if the same symptom is denied in ten other
+    sentences: "no chest pain on Monday, chest pain today" must rate high. Only
+    a symptom that appears exclusively inside a negation is dropped.
+
+    Before this, the floor matched substrings with no negation handling at all,
+    so a clean history — "denies chest pain, no shortness of breath" — rated
+    high. That fails loud rather than silent, which is the right direction, but
+    alert fatigue is the mechanism by which loud failures become silent ones.
+    """
+    found: list[str] = []
+    for sentence in _SENTENCE_SPLIT.split(text):
+        lowered = sentence.lower()
+        for term, tag in _term_to_high_risk_tag().items():
+            position = lowered.find(term)
+            if position < 0:
+                continue
+            if NEGATION_RE.search(sentence[:position]):
+                continue
+            if tag not in found:
+                found.append(tag)
+    return found
+
+
+def is_unreadable(text: str, language: str | None) -> bool:
+    """True when a turn carries clinical weight the vocabulary could not read.
+
+    The failure this exists for: romanised Hokkien is transcribed faithfully,
+    stored, and then produces no tags, no risk level, no highlight and no card.
+    The words sit in the timeline where a human could read them, and the Glance
+    View is silent about the reason for the visit — silent *confidently*, with
+    nothing to indicate the tagger did not understand the language it was given.
+
+    Abstention beats silence. Chasing recall with more vocabulary is an arms
+    race; saying "there is content here I could not read" is not (D-072).
+
+    Deliberately conservative: a turn must be substantive, produce no tags, AND
+    be in a language outside the supported set. English small talk produces no
+    tags either and is not a gap in understanding.
+    """
+    if not text or len(text.split()) < _SUBSTANTIVE_WORDS:
+        return False
+    if language and language.lower() in SUPPORTED_LANGUAGES:
+        return False
+    tags, _ = tag_span(text)
+    return not tags
+
 # Chief-complaint framing — what the visit was actually about.
 COMPLAINT_CUES: tuple[str, ...] = (
     "presents with",

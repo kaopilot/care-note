@@ -73,7 +73,15 @@ _DOCTOR_CONSULT = TranscriptTemplate(
         Turn("patient", "My feet have been tingling at night. Maybe two weeks now. Both feet.",
              26000, 32000),
         Turn("clinician", "Any numbness, or weakness in the legs?", 32000, 34800),
-        Turn("patient", "Not numb exactly. Just the tingling.", 34800, 38000),
+        # Romanised Hokkien, code-switched. Ordinary for an older patient in
+        # this region, and the build has no vocabulary for it: this turn is
+        # transcribed and stored faithfully, then produces no tags, no risk
+        # level and no card. It is here so the "content I could not read" flag
+        # fires on a real fixture rather than the gap being invisible in every
+        # demo. See DECISIONS.md D-072.
+        Turn("patient", "Bo numb lah. Ka joah tioh e kha there thiam thiam, "
+                        "bo hoat tou khun.", 34800, 37000, 0.48, "nan"),
+        Turn("patient", "Not numb exactly. Just the tingling.", 37000, 38000),
         Turn("clinician", "Given the glycaemic control, I want to screen for early diabetic "
                           "neuropathy. I'll also repeat your urine ACR — there was a query "
                           "about microalbuminuria last time.", 38000, 49000),

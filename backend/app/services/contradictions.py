@@ -67,7 +67,7 @@ from sqlalchemy.orm import Session
 from app.core.enums import AI_SCRIBED_TYPES, EntryType, RiskLevel
 from app.core.provenance import entry_pointer
 from app.models import Entry
-from app.services.features import MEDICATIONS
+from app.services.features import MEDICATIONS, NEGATION_RE
 
 # Severity of each contradiction class. Allergy conflicts are `critical` and are
 # never scored below it — see `NEVER_SOFTENED` in the Glance View integration.
@@ -104,13 +104,12 @@ _ADMINISTRATION_CUES = (
 _STOP_CUES = (r"stopped", r"discontinued", r"held", r"ceased", r"withheld", r"stop")
 _START_CUES = (r"started", r"commenced", r"continue", r"continued", r"increased")
 
-# Negation within this many characters before a drug name suppresses a match.
-# Crude, and knowingly so: "denies", "no", "not" and "avoid" are the forms that
-# actually appear in the synthetic corpus. Real negation scope detection is a
-# documented gap (see the module docstring and D-068).
-_NEGATION = re.compile(
-    r"\b(no|not|never|deni(?:es|ed)|avoid|without|nil)\b[^.;]{0,40}$", re.I
-)
+# Negation scope. Defined once in app.services.features and imported here so
+# the two consumers cannot drift into disagreeing about whether the same
+# sentence asserts something. Crude, and knowingly so: "denies", "no", "not"
+# and "avoid" are the forms that actually appear in the corpus. Real negation
+# scope detection is a documented gap (see the module docstring and D-068).
+_NEGATION = NEGATION_RE
 
 _DOSE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml|units?|iu)\b", re.I)
 
