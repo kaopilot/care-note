@@ -480,3 +480,108 @@ def _allergy_finding(allergy: _Claim, given: _Claim, same_drug: bool, *, flip: b
             f"in another."
         )
     return ("allergy_vs_administration", ALLERGY_SEVERITY, allergy.drug, detail, flip)
+
+
+@dataclass
+class GroupedContradiction:
+    """One *clinical disagreement*, however many entry pairs evidence it.
+
+    `detect` works pairwise, which is the right primitive: it is what makes
+    every finding individually checkable and individually citable. It is the
+    wrong unit to show a clinician.
+
+    A penicillin allergy recorded at four routine visits and denied in two
+    produces eight pairs from `detect`, and all eight say the same clinical
+    thing: *this chart disagrees with itself about penicillin.* Before this
+    layer existed the Glance View rendered them as eight cards, and because the
+    card list is capped (`MAX_CONTRADICTIONS`), a longstanding allergy could
+    fill the cap with copies of itself and evict an unrelated dose
+    disagreement entirely. That is the failure mode the cap was meant to
+    prevent, arriving through the front door — and it got monotonically worse
+    the longer the record grew, which is the one thing a longitudinal product
+    cannot afford.
+
+    Grouping collapses the display unit to `(kind, subject)` and keeps every
+    citation. Nothing is discarded: the representative pair is the one a
+    clinician reads first, and every other entry on both sides is carried in
+    `also_left` / `also_right` with its own pointer, so provenance stays
+    addressable rather than merely summarised.
+    """
+
+    kind: str
+    severity: RiskLevel
+    subject: str
+    detail: str
+    human_human: bool
+    # The pair shown first. Same shape the ungrouped finding always had.
+    left: Contradiction
+    # Additional distinct entries on each side, beyond the representative pair.
+    also_left: list[tuple[str, str, str, bool]]  # (entry_id, pointer, quote, is_ai)
+    also_right: list[tuple[str, str, str, bool]]
+    pair_count: int
+
+    @property
+    def entry_count(self) -> int:
+        """Distinct entries evidencing this disagreement, both sides together."""
+        return 2 + len(self.also_left) + len(self.also_right)
+
+
+def group(found: list[Contradiction]) -> list[GroupedContradiction]:
+    """Collapse pairwise findings to one per `(kind, subject)`.
+
+    Order is preserved from `detect`, which has already sorted most severe
+    first, so the first pair seen for a subject becomes its representative.
+
+    `human_human` is true if *any* pair in the group is human-human. That is
+    deliberately the pessimistic reading: if even one pair pits two people
+    against each other then no precedence rule settles this disagreement, and
+    saying so is the honest label for the whole group.
+    """
+    order: dict[tuple[str, str], GroupedContradiction] = {}
+
+    for item in found:
+        key = (item.kind, item.subject)
+        group_item = order.get(key)
+        if group_item is None:
+            order[key] = GroupedContradiction(
+                kind=item.kind,
+                severity=item.severity,
+                subject=item.subject,
+                detail=item.detail,
+                human_human=item.human_human,
+                left=item,
+                also_left=[],
+                also_right=[],
+                pair_count=1,
+            )
+            continue
+
+        group_item.pair_count += 1
+        group_item.human_human = group_item.human_human or item.human_human
+
+        seen_left = {group_item.left.left_entry_id} | {
+            row[0] for row in group_item.also_left
+        }
+        seen_right = {group_item.left.right_entry_id} | {
+            row[0] for row in group_item.also_right
+        }
+        if item.left_entry_id not in seen_left:
+            group_item.also_left.append(
+                (
+                    item.left_entry_id,
+                    item.left_pointer,
+                    item.left_quote,
+                    item.left_is_ai,
+                )
+            )
+        if item.right_entry_id not in seen_right:
+            group_item.also_right.append(
+                (
+                    item.right_entry_id,
+                    item.right_pointer,
+                    item.right_quote,
+                    item.right_is_ai,
+                )
+            )
+
+    return list(order.values())

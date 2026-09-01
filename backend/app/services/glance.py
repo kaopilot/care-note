@@ -499,8 +499,26 @@ def _contradictions(entries: list[Entry]) -> list[dict]:
     Scoped to allergies, doses and medication status — see
     `services/contradictions.py` for why detection is deterministic and why it
     resolves nothing.
+
+    The cap here counts *disagreements*, not entry pairs. Detection is
+    pairwise, so one long-running allergy disagreement mentioned across a year
+    of routine notes yields many pairs that all say the same thing; capping the
+    raw pairs let those copies fill the list and push an unrelated dose
+    disagreement off it. Grouping first means the cap trims distinct clinical
+    problems, which is the only unit it was ever meant to measure. See
+    `contradictions.group` and DECISIONS.md D-081.
     """
-    found = contradiction_service.detect(entries)
+    found = contradiction_service.group(contradiction_service.detect(entries))
+
+    def side(row: tuple[str, str, str, bool]) -> dict:
+        entry_id, pointer, quote, is_ai = row
+        return {
+            "entry_id": entry_id,
+            "pointer": pointer,
+            "quote": quote,
+            "is_ai": is_ai,
+        }
+
     return [
         {
             "kind": item.kind,
@@ -509,17 +527,24 @@ def _contradictions(entries: list[Entry]) -> list[dict]:
             "detail": item.detail,
             "human_human": item.human_human,
             "left": {
-                "entry_id": item.left_entry_id,
-                "pointer": item.left_pointer,
-                "quote": item.left_quote,
-                "is_ai": item.left_is_ai,
+                "entry_id": item.left.left_entry_id,
+                "pointer": item.left.left_pointer,
+                "quote": item.left.left_quote,
+                "is_ai": item.left.left_is_ai,
             },
             "right": {
-                "entry_id": item.right_entry_id,
-                "pointer": item.right_pointer,
-                "quote": item.right_quote,
-                "is_ai": item.right_is_ai,
+                "entry_id": item.left.right_entry_id,
+                "pointer": item.left.right_pointer,
+                "quote": item.left.right_quote,
+                "is_ai": item.left.right_is_ai,
             },
+            # Every other entry that evidences the same disagreement. Carried,
+            # not summarised: each keeps its own pointer so a clinician can
+            # open any of them (scenario 16 — provenance stays addressable).
+            "also_left": [side(row) for row in item.also_left],
+            "also_right": [side(row) for row in item.also_right],
+            "entry_count": item.entry_count,
+            "pair_count": item.pair_count,
         }
         for item in found[:MAX_CONTRADICTIONS]
     ]

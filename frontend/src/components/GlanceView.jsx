@@ -166,6 +166,33 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                     </button>
                   ))}
                 </div>
+                {/* The same disagreement recorded in further entries. One card,
+                    but every entry behind it stays individually reachable —
+                    summarising the count and dropping the pointers would trade
+                    an alert-fatigue problem for a provenance one. */}
+                {(item.also_left?.length || item.also_right?.length) > 0 && (
+                  <div className="mt-1.5 border-t border-rose-100 pt-1.5">
+                    <p className="text-[11px] text-rose-900">
+                      Also recorded in {(item.also_left?.length || 0) + (item.also_right?.length || 0)}{' '}
+                      other {(item.also_left?.length || 0) + (item.also_right?.length || 0) === 1
+                        ? 'entry'
+                        : 'entries'}{' '}
+                      — {item.entry_count} in total disagree about {item.subject}.
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {[...(item.also_left || []), ...(item.also_right || [])].map((side) => (
+                        <button
+                          key={side.entry_id}
+                          onClick={() => onJumpTo(side.entry_id)}
+                          className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-left text-[11px] text-slate-600 hover:border-slate-400"
+                          title={side.quote}
+                        >
+                          {side.is_ai ? '◇ AI entry' : '• Person'} · open
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
