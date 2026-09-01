@@ -40,12 +40,24 @@ function groupByDate(entries) {
  * body — so the timeline does not reflow underneath the reader when the real
  * entry arrives.
  */
-function ProcessingCard({ label }) {
+function ProcessingCard({ label, onCancel }) {
   return (
     <li className="border-l-4 border-dashed border-l-role-system bg-white p-3 shadow-sm ring-1 ring-slate-200">
       <div className="flex items-center gap-2">
         <span className="motion-pulse inline-block h-2 w-2 animate-pulse rounded-full bg-role-system" />
         <span className="text-xs font-medium text-slate-700">{label}</span>
+        {onCancel && (
+          // Scenario 8. The server timeout bounds this at 8 seconds, but a
+          // clinician with a patient in the room should not have to wait out
+          // even that. Safe to abandon: the transcript is stored before the
+          // model is called, so cancelling loses the summary, never the consult.
+          <button
+            onClick={onCancel}
+            className="ml-auto rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-500 hover:text-slate-900"
+          >
+            Cancel
+          </button>
+        )}
       </div>
       <p className="mt-1.5 font-mono text-[13px] text-slate-500">
         Redacting identifiers, then summarising the transcript…
@@ -61,6 +73,7 @@ function ProcessingCard({ label }) {
 export default function Timeline({
   entries,
   processing,
+  onCancelProcessing,
   emphasis,
   users,
   session,
@@ -102,7 +115,7 @@ export default function Timeline({
 
       {processing && (
         <ul className="mt-3">
-          <ProcessingCard label={processing} />
+          <ProcessingCard label={processing} onCancel={onCancelProcessing} />
         </ul>
       )}
 

@@ -405,6 +405,28 @@ def is_stale(highlight: Highlight, entry: Entry) -> bool:
     return highlight.source_version_number != entry.version_number
 
 
+def current_text(entry: Entry, highlight: Highlight) -> str | None:
+    """Whatever now occupies the highlight's coordinates in the live entry.
+
+    The counterpart to `anchored_text`. That function deliberately refuses to
+    show current text under an old claim; this one exposes it explicitly, so
+    the UI can put the two side by side and let a clinician see *what changed*
+    rather than only being told that something did.
+
+    Returns None when the offsets no longer land inside the content — an entry
+    edited shorter is the common case. That is a real answer and the UI says
+    "this part of the note no longer exists", which is more useful than a
+    truncated fragment that reads like a quote (D-076).
+    """
+    content = entry.content or ""
+    start, end = highlight.span_start, highlight.span_end
+    if start is None or end is None:
+        return None
+    if start < 0 or end > len(content) or start >= end:
+        return None
+    return content[start:end]
+
+
 def anchored_text(db: Session, highlight: Highlight, entry: Entry) -> str:
     """The words as they read *when the highlight was made*.
 

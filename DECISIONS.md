@@ -2127,3 +2127,57 @@ vocabulary, red-flag terms, decay thresholds and confidence bands remain
 module-level constants shared by every clinic, so a second clinic still cannot
 tune any of them without a deploy. That is the larger half of the multi-tenancy
 gap and it is not addressed here.
+
+### D-076 · Stale provenance shows both versions, not just a warning
+
+The reviewers' item 16 gained a sentence in the second round: *"Can the system
+mark dependent output stale and show the original and current versions side by
+side?"* We had the first half (D-030) and not the second.
+
+Telling a clinician "the source note changed" without showing what it changed to
+leaves them to open the entry and diff it by eye — which is the work the system
+was supposed to do. Staleness was addressable but not yet *inspectable*.
+
+`highlights.current_text()` is the deliberate counterpart to `anchored_text()`.
+`anchored_text` refuses to show current content under an old claim, because that
+would be a quiet lie about what a clinician confirmed. `current_text` exposes the
+same coordinates in the live entry explicitly, so the UI can put them side by
+side and label which is which. The two functions disagree on purpose, and the
+comparison block is where that disagreement becomes useful.
+
+**Returns None when the offsets no longer land inside the content** — an entry
+edited shorter is the common case. The card then says "This part of the note no
+longer exists", which is a real answer. A truncated fragment would read like a
+quote and be worse than saying nothing.
+
+Both version numbers are named on the card (`v2 → v5`) rather than only the fact
+of a change, so a clinician can go to the version history and see exactly which
+edit did it.
+
+**UI-only tests, added at the same time.** `Phase9Surfaces.test.jsx` covers this,
+the delivery states, the unreadable-content flag and the patient correction
+banner. Every one of those had correct backend logic and nothing asserting that
+anything rendered it — and a delivery state computed correctly and never drawn is
+indistinguishable, from the clinician's side, from not having been computed. One
+real regression was caught while writing them: `confidence_flags` was keyed on
+`entry_id` alone, so an entry raising both an unread and a low-confidence flag
+collapsed into a single React child.
+
+### D-077 · A slow model call can be abandoned
+
+Scenario 8's remaining half. D-070 bounded the wait at 8 seconds; this gives the
+clinician a way out before it elapses. `runScribe` now carries an `AbortSignal`
+and the processing card has a Cancel button.
+
+Safe to abandon for a reason that is an accident of ordering rather than a
+design, and worth naming as such: transcript segments are written **before** the
+model is called (`scribe.py`), so cancelling loses the summary and never the
+consult. Cancellation is reported as a plain statement rather than an error —
+*"Summary cancelled. The transcript was saved — you can retry"* — because the
+clinician chose it and nothing went wrong.
+
+**Known gap.** Aborting the browser request does not cancel the server-side call;
+the request completes and its result is discarded. Correct behaviour for a
+clinician standing in a room, wasteful under load. A real fix needs the scribe to
+be a job that can be cancelled, which is the same work as making it retryable
+after a crash (D-032).

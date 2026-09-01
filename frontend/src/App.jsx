@@ -183,15 +183,34 @@ function Workspace({ session, onSignOut }) {
     }
   }
 
+  // Scenario 8: the model hangs and a clinician is standing next to a patient.
+  // The 8-second server timeout (D-070) bounds the wait; this gives them a way
+  // out before it elapses. Aborting is safe because the transcript is written
+  // before the model is called, so cancelling loses the summary and never the
+  // consult.
+  const scribeAbort = useRef(null)
+
+  function cancelScribe() {
+    scribeAbort.current?.abort()
+  }
+
   async function runScribe(interactionType) {
+    const controller = new AbortController()
+    scribeAbort.current = controller
     setProcessing(`${SCRIBE_LABEL[interactionType]} — generating summary`)
     setError(null)
     try {
-      await Api.runScribe(selected, interactionType)
+      await Api.runScribe(selected, interactionType, { signal: controller.signal })
       await load(selected)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      if (err?.name === 'AbortError') {
+        // Not an error state. They chose this, and the transcript is safe.
+        setError('Summary cancelled. The transcript was saved — you can retry.')
+      } else {
+        setError(err instanceof ApiError ? err.message : String(err))
+      }
     } finally {
+      scribeAbort.current = null
       setProcessing(null)
     }
   }
@@ -280,6 +299,7 @@ function Workspace({ session, onSignOut }) {
           <Timeline
             entries={entries}
             processing={processing}
+            onCancelProcessing={cancelScribe}
             emphasis={emphasis}
             users={users}
             session={session}

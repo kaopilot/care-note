@@ -118,6 +118,11 @@ export const Api = {
   attribution: (entryId) => api(`/entries/${entryId}/attribution`),
 
   scribeTemplates: () => api('/scribe/templates'),
-  runScribe: (patientId, interactionType) =>
-    api(`/patients/${patientId}/scribe`, body({ interaction_type: interactionType })),
+  // `options` carries an AbortSignal so a clinician can abandon a slow model
+  // call rather than watching a spinner with a patient in the room (D-070).
+  runScribe: (patientId, interactionType, options = {}) =>
+    api(`/patients/${patientId}/scribe`, {
+      ...body({ interaction_type: interactionType }),
+      ...options,
+    }),
 }

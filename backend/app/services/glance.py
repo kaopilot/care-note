@@ -310,7 +310,18 @@ def _top_highlights(
                 "created_by_role": str(row.created_by_role),
                 "is_manual": row.created_by_role != Role.SYSTEM,
                 "stale": stale,
+                # Both sides, so the UI can show them together rather than
+                # making the clinician choose which one to trust blind.
+                # `span_text` is what was highlighted, resolved against the
+                # version it was anchored to; `current_span_text` is whatever
+                # now occupies those coordinates. When they differ, the second
+                # is what a naive implementation would have silently displayed
+                # under the first one's claim (D-030, D-076).
+                "current_span_text": (
+                    highlight_service.current_text(entry, row) if stale else None
+                ),
                 "source_version_number": row.source_version_number,
+                "entry_version_number": entry.version_number,
                 "entry_type": str(entry.type),
                 "entry_title": entry.title,
                 "entry_timestamp": iso_utc(entry.timestamp),

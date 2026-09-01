@@ -91,6 +91,8 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
   const openActions = glance.open_actions || []
   const conflicts = glance.conflicts || []
   const contradictions = glance.contradictions || []
+  // Reach, not ranking: did anything written for the patient get read (D-074).
+  const delivery = glance.patient_delivery || {}
 
   return (
     <section
@@ -276,7 +278,7 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                         {highlight.stale && (
                           <Chip
                             tone="alert"
-                            title={`Anchored to version ${highlight.source_version_number}; the entry has been edited since`}
+                            title={`Anchored to version ${highlight.source_version_number}; the entry is now at version ${highlight.entry_version_number}`}
                           >
                             Source edited since
                           </Chip>
@@ -301,6 +303,42 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                         </span>
                       </button>
 
+                      {/* Item 16: mark dependent output stale AND show both
+                          versions. Telling a clinician "this changed" without
+                          showing what it changed to leaves them to open the
+                          entry and diff it by eye. The left column is what was
+                          actually confirmed; the right is what a naive
+                          implementation would have silently displayed in its
+                          place (D-076). */}
+                      {highlight.stale && (
+                        <div className="mt-2 rounded border border-amber-300 bg-amber-50/70 p-2">
+                          <p className="text-[11px] font-medium text-amber-950">
+                            The source note changed after this was highlighted —
+                            v{highlight.source_version_number} → v
+                            {highlight.entry_version_number}
+                          </p>
+                          <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                            <div className="rounded bg-white p-1.5 ring-1 ring-amber-200">
+                              <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                Highlighted (v{highlight.source_version_number})
+                              </span>
+                              <span className="mt-0.5 block text-xs italic leading-snug text-slate-900">
+                                "{highlight.span_text}"
+                              </span>
+                            </div>
+                            <div className="rounded bg-white p-1.5 ring-1 ring-slate-200">
+                              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                Now at that position (v{highlight.entry_version_number})
+                              </span>
+                              <span className="mt-0.5 block text-xs italic leading-snug text-slate-700">
+                                {highlight.current_span_text
+                                  ? `"${highlight.current_span_text}"`
+                                  : 'This part of the note no longer exists.'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <p className="mt-1 text-[11px] text-slate-600">
                         <span className="font-medium text-slate-700">Why: </span>
                         {highlight.risk_reason}
@@ -384,19 +422,90 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                   clinician acts on them differently. */}
               <SectionTitle count={confidenceFlags.length}>AI needs checking</SectionTitle>
               <ul className="mt-1.5 space-y-1">
-                {confidenceFlags.map((flag) => (
-                  <li key={flag.entry_id}>
-                    <button
-                      onClick={() => onJumpTo(flag.entry_id)}
-                      className="w-full rounded border border-orange-200 bg-orange-50/60 px-2 py-1.5 text-left hover:border-orange-400"
-                    >
-                      <ConfidenceChip confidence={flag.confidence} band={flag.confidence_band} />
-                      <span className="mt-1 block truncate text-xs text-slate-700">
-                        {flag.title || entryLabel(flag.type)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {confidenceFlags.map((flag) => {
+                  // An entry can raise both flags at once, so the entry id
+                  // alone is no longer unique.
+                  const unread = flag.confidence_band === 'unread'
+                  return (
+                    <li key={`${flag.entry_id}-${flag.confidence_band}`}>
+                      <button
+                        onClick={() => onJumpTo(flag.entry_id)}
+                        className={
+                          unread
+                            ? 'w-full rounded border border-violet-300 bg-violet-50/70 px-2 py-1.5 text-left hover:border-violet-500'
+                            : 'w-full rounded border border-orange-200 bg-orange-50/60 px-2 py-1.5 text-left hover:border-orange-400'
+                        }
+                      >
+                        {unread ? (
+                          // Deliberately not a confidence score. "The system
+                          // read this and is unsure" and "the system could not
+                          // read part of this" are different warnings, and a
+                          // number here would imply the second was measured.
+                          <Chip tone="alert">Not read by the system</Chip>
+                        ) : (
+                          <ConfidenceChip
+                            confidence={flag.confidence}
+                            band={flag.confidence_band}
+                          />
+                        )}
+                        <span className="mt-1 block truncate text-xs text-slate-700">
+                          {flag.title || entryLabel(flag.type)}
+                        </span>
+                        {flag.label && (
+                          <span className="mt-0.5 block text-[11px] leading-snug text-violet-900">
+                            {flag.label}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+
+          {delivery.items && delivery.items.length > 0 && (
+            <div>
+              {/* Not a ranking judgement either. Everything else on this card
+                  is about what the clinician should read; this is about
+                  whether anything the clinic wrote was ever read by the person
+                  it was written for. A correction she has not seen means she
+                  is acting on information the clinic already knows is wrong. */}
+              <SectionTitle count={delivery.items.length}>
+                {delivery.reachable ? 'Not yet reached the patient' : 'Patient not reachable'}
+              </SectionTitle>
+              {!delivery.reachable && (
+                <p className="mt-0.5 text-[11px] leading-snug text-amber-900">
+                  No patient login exists, so nothing written here can be read by
+                  them. Register one from the patient record.
+                </p>
+              )}
+              <ul className="mt-1.5 space-y-1">
+                {delivery.items.map((item) => {
+                  const corrected = item.state === 'corrected'
+                  return (
+                    <li key={item.entry_id}>
+                      <button
+                        onClick={() => onJumpTo(item.entry_id)}
+                        className={
+                          corrected
+                            ? 'w-full rounded border border-amber-400 bg-amber-50 px-2 py-1.5 text-left hover:border-amber-600'
+                            : 'w-full rounded border border-slate-300 bg-slate-50 px-2 py-1.5 text-left hover:border-slate-500'
+                        }
+                      >
+                        <Chip tone={corrected ? 'alert' : 'info'}>
+                          {corrected ? 'Corrected, not seen' : 'Unopened'}
+                        </Chip>
+                        <span className="mt-1 block truncate text-xs text-slate-700">
+                          {item.title || entryLabel(item.type)}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-snug text-slate-600">
+                          {item.label}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           )}

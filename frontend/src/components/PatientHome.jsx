@@ -38,6 +38,33 @@ export default function PatientHome({ care, timing, onRunSession, sessionBusy, v
         )}
       </header>
 
+      {/* Above "what to do next", deliberately. If something she already acted
+          on has changed, that outranks every other thing this page says — she
+          may be taking the wrong dose right now. Plain language, no clinical
+          shorthand, and it says what to actually do rather than just flagging
+          that a change occurred. See DECISIONS.md D-074. */}
+      {(care.corrections || []).length > 0 && (
+        <section className="mt-4 rounded-lg border-2 border-amber-500 bg-amber-50 px-5 py-4">
+          <h3 className="text-base font-semibold text-amber-950">
+            Please read this first — something changed
+          </h3>
+          <ul className="mt-2 space-y-3">
+            {(care.corrections || []).map((correction) => (
+              <li key={correction.entry_id} className="rounded bg-white px-3 py-2 ring-1 ring-amber-300">
+                <p className="text-sm font-semibold text-slate-900">{correction.title}</p>
+                <p className="mt-1 text-sm leading-snug text-slate-800">
+                  {correction.message}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-amber-900">
+            If you are unsure what changed or what to do, call the clinic before
+            your next dose.
+          </p>
+        </section>
+      )}
+
       <section className="mt-4 rounded-lg border border-slate-300 bg-white px-5 py-4">
         <h3 className="text-base font-semibold text-slate-900">
           {labels.next_steps || 'What to do next'}
