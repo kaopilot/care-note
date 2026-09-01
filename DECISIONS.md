@@ -1962,3 +1962,54 @@ Nothing yet flags *untagged* content in a supported language, which is the
 larger recall gap. `unreadable_segment_count` is a new column; `create_all` does
 not migrate an existing SQLite file, so a dev database from before this commit
 needs re-seeding.
+
+### D-073 · A denial is a claim, not an absence
+
+Scenario 13. A nurse recorded a penicillin allergy; the patient told the AI she
+had no known allergies. Both were in the timeline and `detect()` returned **zero**
+contradictions. Verified by running it, not by reading the code.
+
+The cause is a guard that is correct on its own. `_extract_claims` drops negated
+mentions so that "patient denies allergy to aspirin" never becomes a critical
+allergy alert. Dropping them also discarded the patient's denial, so it was never
+compared against anything. The extractor could represent an assertion and an
+absence, and had no way to represent a **denial** — a stated position that can
+disagree with another stated position.
+
+**Why the gap matters more than the missing alert.** The disagreement is the
+signal. "Allergy recorded, patient denies it" means the patient forgot, or was
+never told, or it was charted against the wrong record, or it was an intolerance
+rather than a true allergy — and a clinician needs to know which. Showing only the
+allergy is safe and wastes the one thing a longitudinal record exists to produce.
+Showing only the denial would be lethal.
+
+Negated allergy mentions now become `allergy_denial` claims, and `_BLANKET_DENIAL`
+captures the form the scenario actually takes — "no known allergies", "NKDA", "nil
+known allergies" — as a denial of `ANY_ALLERGEN`. Negation outside an allergy
+context stays dropped: "not started on warfarin" contradicts nothing on its own.
+
+**HIGH, not CRITICAL.** Unlike allergy-vs-administration, nothing dangerous has
+happened yet — the safe action is already the one in force. This is a
+reconciliation task, not an alarm. Rating it critical would dilute the level that
+means "someone is about to be given a drug they react to", and that is the level
+that has to keep working.
+
+**The assertion always reports first**, so the clinician reads "allergy
+recorded … but denied" rather than the reverse. As with every other class here,
+the system reports and does not resolve: there is no precedence rule between a
+nurse's note and a patient's own account, and inventing one would be a clinical
+decision this system has no standing to make (D-068).
+
+**A defect found while testing this.** The first blanket-denial pattern matched
+"denies allergy **to aspirin**", so a specific denial of one drug registered as a
+blanket denial of all of them and contradicted an unrelated penicillin allergy.
+Fixed with a negative lookahead; pinned by
+`test_a_denial_of_one_drug_does_not_contradict_an_allergy_to_another`. A
+contradiction detector that cries wolf is worse than one with gaps — the gap
+loses a finding, the false positive teaches people to stop reading all of them.
+
+**Known gaps.** Temporal ordering is not considered: an allergy recorded in 2019
+and denied today reads the same as the reverse, though the second is far more
+likely to be a genuine correction. Denials are only compared against allergies,
+not against dose or status claims. And a denial in a language the vocabulary does
+not cover is not detected at all (D-072).

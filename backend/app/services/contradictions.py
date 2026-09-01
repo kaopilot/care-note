@@ -111,6 +111,22 @@ _START_CUES = (r"started", r"commenced", r"continue", r"continued", r"increased"
 # scope detection is a documented gap (see the module docstring and D-068).
 _NEGATION = NEGATION_RE
 
+# A blanket denial: the patient says they have no allergies at all, rather than
+# denying one specific drug. This is the form the scenario-13 case actually
+# takes — a nurse records a penicillin allergy, the patient tells the AI she has
+# no known allergies — and it was invisible because a denial was never a claim.
+_BLANKET_DENIAL = re.compile(
+    r"\b(?:nkda|nkma"
+    r"|no\s+known\s+(?:drug\s+|medication\s+)?allerg(?:y|ies)"
+    r"|nil\s+known\s+allerg(?:y|ies)"
+    r"|deni(?:es|ed)\s+(?:any\s+|all\s+)?(?:known\s+)?allerg(?:y|ies)"
+    r"|no\s+allerg(?:y|ies))\b(?!\s+to\b)",
+    re.I,
+)
+
+# Stands in for "every drug" on the denial side of a blanket statement.
+ANY_ALLERGEN = "*"
+
 _DOSE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml|units?|iu)\b", re.I)
 
 # Mass units normalised to milligrams so "1g" and "1000mg" are recognised as the
@@ -144,7 +160,7 @@ class Contradiction:
     contradiction; it is an observation, and this module does not make those.
     """
 
-    kind: str  # allergy_vs_administration | dose_disagreement | status_disagreement
+    kind: str  # allergy_vs_administration | assertion_vs_denial | dose_disagreement | status_disagreement
     severity: RiskLevel
     subject: str  # the medication or allergen the two entries disagree about
     detail: str  # one line a clinician can read without opening either entry
@@ -206,6 +222,15 @@ def _extract_claims(text: str) -> list[_Claim]:
     for sentence in _sentences(text):
         for drug, position in _drug_mentions(sentence):
             if _negated(sentence, position):
+                # A denial is not nothing. If the sentence is about allergy at
+                # all, record it as a claim of its own kind so it can be
+                # compared against an allergy asserted elsewhere in the chart.
+                # Everything else negated stays dropped: "not started on
+                # warfarin" contradicts nothing on its own.
+                if _matches_any(sentence, _ALLERGY_CUES):
+                    claims.append(
+                        _Claim(drug, MEDICATIONS[drug], sentence.strip(), "allergy_denial", None)
+                    )
                 continue
             drug_class = MEDICATIONS[drug]
             dose_match = _DOSE.search(sentence)
@@ -247,6 +272,14 @@ def _extract_claims(text: str) -> list[_Claim]:
             if any(c.drug == allergen for c in claims):
                 continue
             claims.append(_Claim(allergen, "", sentence.strip(), "allergy", None))
+
+    # Blanket denials. Recorded once per text: "no known allergies" said twice
+    # is still one position, and two copies would produce duplicate findings
+    # against the same asserted allergy.
+    for sentence in _sentences(text):
+        if _BLANKET_DENIAL.search(sentence):
+            claims.append(_Claim(ANY_ALLERGEN, "", sentence.strip(), "allergy_denial", None))
+            break
     return claims
 
 
@@ -318,6 +351,33 @@ def _compare(left: _Claim, right: _Claim):
     same_drug = left.drug == right.drug
     same_class = bool(left.drug_class) and left.drug_class == right.drug_class
 
+    # 0. An allergy asserted in one entry and denied in another.
+    #
+    #    The disagreement *is* the signal. "Allergy recorded, patient denies it"
+    #    means one of: the patient forgot, was never told, it was charted
+    #    against the wrong record, or it was an intolerance rather than a true
+    #    allergy — and a clinician needs to know which. Showing only the allergy
+    #    is safe but wastes the one thing a longitudinal record was supposed to
+    #    produce. Showing only the denial would be lethal.
+    #
+    #    HIGH, not CRITICAL: unlike allergy-vs-administration, nothing dangerous
+    #    has happened yet — the safe action is already the one being taken. This
+    #    is a reconciliation task, not an alarm, and rating it critical would
+    #    dilute the level that means "someone is about to be given a drug they
+    #    react to". See D-073.
+    if left.kind == "allergy" and right.kind == "allergy_denial":
+        if same_drug or right.drug == ANY_ALLERGEN:
+            return _denial_finding(left, right, flip=False)
+    if right.kind == "allergy" and left.kind == "allergy_denial":
+        if same_drug or left.drug == ANY_ALLERGEN:
+            return _denial_finding(right, left, flip=True)
+
+    # A denial contradicts nothing except an assertion. Two denials agree, and a
+    # denial against an administration is not a contradiction — it is a normal
+    # prescription for a drug nobody claimed an allergy to.
+    if "allergy_denial" in {left.kind, right.kind}:
+        return None
+
     # 1. Allergy against administration — same drug, or same drug class.
     if left.kind == "allergy" and right.kind in {"administration", "start"}:
         if same_drug or same_class:
@@ -369,6 +429,27 @@ def _render_dose(dose: tuple[str, str] | None) -> str:
     """As written in the note, not as normalised. A clinician checking the flag
     against the entry needs to find the same string they are being shown."""
     return f"{dose[0]}{dose[1]}" if dose else "an unstated dose"
+
+
+def _denial_finding(allergy: _Claim, denial: _Claim, *, flip: bool):
+    """An allergy recorded in one entry and denied in another.
+
+    The assertion always reports first, so the clinician reads "allergy
+    recorded ... but denied" rather than the reverse. Order matters here: the
+    safe reading must lead.
+    """
+    if denial.drug == ANY_ALLERGEN:
+        detail = (
+            f"Allergy to {allergy.drug} is recorded in one entry, but another "
+            f"entry records no known allergies. Confirm with the patient before "
+            f"prescribing."
+        )
+    else:
+        detail = (
+            f"Allergy to {allergy.drug} is recorded in one entry and explicitly "
+            f"denied in another. Confirm with the patient before prescribing."
+        )
+    return ("assertion_vs_denial", RiskLevel.HIGH, allergy.drug, detail, flip)
 
 
 def _allergy_finding(allergy: _Claim, given: _Claim, same_drug: bool, *, flip: bool):
