@@ -88,8 +88,14 @@ class Patient(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     clinic_id: Mapped[str] = mapped_column(ForeignKey("clinics.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    dob: Mapped[str] = mapped_column(String(10), nullable=False)  # ISO date, synthetic
-    mrn: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Both nullable, and that is the point (D-075). Requiring a date of birth
+    # before a patient can exist excludes anyone who does not know it or will
+    # not give it at the front desk; requiring an MRN means she cannot be
+    # registered until some other system has assigned one. The schema was a
+    # second, quieter way of deciding she was not a patient — the enrolment
+    # route issues a provisional MRN rather than refusing.
+    dob: Mapped[str | None] = mapped_column(String(10), nullable=True)  # ISO date, synthetic
+    mrn: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     clinic: Mapped[Clinic] = relationship(back_populates="patients")

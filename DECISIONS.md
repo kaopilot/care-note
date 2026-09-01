@@ -2068,3 +2068,62 @@ everything current as read, so a patient who opens the page and reads nothing
 registers as having read it. Per-entry acknowledgement is the honest version and
 is not built. Nothing yet escalates a correction that stays unread — there is no
 scheduler, and no channel for it to escalate to.
+
+### D-075 · Enrolment is clinic work, not a developer task
+
+Scenario 1: a patient who exists for the clinic as a phone number in a WhatsApp
+thread. Scenario 5: a second clinic onboarding on Monday.
+
+**The identity model was never the obstacle.** There is no email column anywhere
+in this schema — login is username plus password, so a phone number works as a
+username today with no code change. What did not exist was any way to create the
+row. Every account in the build existed because a developer ran `init_db.py`. A
+nurse holding the number had no screen anywhere that turned it into a record. The
+patient was not rejected; she was unreachable, which in a clinic is the same
+outcome.
+
+That absence was invisible during the build for a specific reason worth naming:
+`init_db.py` runs in Phase 1 step 1, so from the first commit onwards every test,
+script and demo started from a fully populated database. "How does a patient come
+to exist?" never arose as a question because patients always already existed. The
+seed silently stood in for a capability. **Anything a seed script provides is a
+feature you have not built and will not notice missing.**
+
+**A second, quieter exclusion in the schema.** `Patient.dob` and `Patient.mrn`
+were both `NOT NULL`. Requiring a date of birth before a patient can exist
+excludes anyone who does not know it or will not give it at a front desk;
+requiring an MRN means she cannot be registered until some other system has
+assigned one. Both are now nullable, and enrolment issues a provisional MRN
+rather than refusing. This was found by writing the route, not by reading the
+model — the constraint only became visible when something tried to insert a real
+walk-in.
+
+**`identifier_type` is explicit** — `phone`, `nric`, `mrn`, `internal`. A username
+that happens to contain digits is not the same as the clinic knowing it identifies
+this person by her phone number, and the difference matters the first time
+somebody tries to reach her.
+
+**A login is optional.** Plenty of patients will never use a portal, and forcing a
+credential nobody wants produces dormant accounts that look like reach. The Glance
+View reports `reachable: false` instead (D-074), which is the honest version.
+
+**Phone validation is deliberately permissive** — `+65`, `01x-`, spaces, dashes.
+Strict validation is exactly how you exclude the person this route exists for.
+
+**The passcode is returned once and never stored.** Six digits, because it gets
+read aloud or written on an appointment card; a long random string would be copied
+down wrongly, which is its own kind of access failure. Only the hash is persisted,
+and the passcode is never logged.
+
+**Scoping is unchanged, not re-implemented.** `clinic_id` comes from the caller's
+token and is not accepted from the body, and `issue_login` goes through
+`scope.get_or_404`, so a staff member in Clinic A cannot enrol into or issue
+credentials for Clinic B. Pinned by `test_staff_cannot_issue_a_login_for_another_clinics_patient`.
+
+**What this does not fix.** Clinic creation is still `init_db.py` — deliberately,
+since provisioning a tenant is not routine clinic work and wants an operator path
+rather than an in-app button. The rest of scenario 5 also stands: clinical
+vocabulary, red-flag terms, decay thresholds and confidence bands remain
+module-level constants shared by every clinic, so a second clinic still cannot
+tune any of them without a deploy. That is the larger half of the multi-tenancy
+gap and it is not addressed here.

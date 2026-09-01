@@ -15,6 +15,7 @@ from app.routes import (
     capture_routes,
     comment_routes,
     demo_rbac,
+    enrolment_routes,
     entry_routes,
     glance_routes,
     highlight_routes,
@@ -47,6 +48,9 @@ app.add_middleware(
 
 app.include_router(auth_routes.router)
 app.include_router(patient_routes.router)
+# Scenario 1: a clinic can register a patient and issue a login without a
+# developer running a script (D-075).
+app.include_router(enrolment_routes.router)
 app.include_router(entry_routes.router)
 app.include_router(comment_routes.router)
 app.include_router(highlight_routes.router)

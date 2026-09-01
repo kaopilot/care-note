@@ -49,8 +49,8 @@ router = APIRouter(tags=["patients"])
 class PatientOut(BaseModel):
     id: str
     name: str
-    dob: str
-    mrn: str
+    dob: str | None = None
+    mrn: str | None = None
     clinic_id: str
 
 
