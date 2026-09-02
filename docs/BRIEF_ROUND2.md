@@ -8,7 +8,7 @@ Per-scenario verdicts and their tests are in
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
 6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
-new tests, 748 backend and 67 component tests passing.
+new tests, 843 backend and 67 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -476,6 +476,25 @@ Both catch it; only one tells you what it exposed. Building it also showed that
 sending an empty body made eleven write routes return 422, because FastAPI
 validates before the RBAC dependency runs — a test counting that as "refused"
 would have passed for the wrong reason on every write route we have.
+
+*Four more properties held, and that is also a result* (D-097). Content
+round-trip through the real API: `BP <120/80` and `<script>alert(1)</script>`
+both come back byte-identical, so neither promise in D-015 is being satisfied
+at the other's expense. Analyser totality and determinism over the full unicode
+range — an unstable score cannot be wrong, because it never says the same thing
+twice. Revision-history invariants over generated edit/revert sequences, of
+which the load-bearing one is that already-written versions are frozen:
+highlights anchor to `source_version_number`, so a mutable version would make
+every provenance pointer a liar. And log hygiene, greping every record from
+every logger at DEBUG — including exception text — for synthetic identifiers
+written through create, edit, comment, refusal, validation failure and the
+scribe pipeline. Nothing leaked.
+
+**Every one was mutation-checked**, because a test that has never failed is a
+test whose teeth are unmeasured. Deleting the `clinic_id` filter, rolling the
+version number backwards on revert, and adding a single
+`logging.info("updating: %s", payload.content)` are each caught by the property
+that claims to cover them.
 
 We also found a leak we chose **not** to fix: space-separated identifiers
 (`900101 01 5432`, which is what a patient reading an IC aloud transcribes to)

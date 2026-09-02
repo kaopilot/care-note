@@ -2914,3 +2914,82 @@ knowing what it exposed.
 422-before-403 is not a leak — the status is identical for a real foreign
 patient and an invented one, which the file asserts separately. It simply is not
 authorisation and cannot be counted as it.
+
+### D-097 · Four more properties, and what each one was actually worth
+
+D-095 and D-096 changed the *shape* of the tests after six defects proved to
+share one cause. This records the rest of that pass, including the two that
+found nothing — because a property that holds is a result, and reporting only
+the ones that broke would misrepresent how the exercise went.
+
+**Content round-trip (`test_content_roundtrip_properties.py`) — held.** D-015
+makes two promises that pull against each other: nothing executes, and nothing
+is altered. The tempting implementation satisfies the first by breaking the
+second — strip tags on write and no payload can execute, but `dose <5mg`
+becomes `dose ` and the note still reads as a sentence. Asserted as a round
+trip over generated input and through the real API: `BP <120/80`,
+`<script>alert(1)</script>` and `allergy: penicillin & cephalosporins` all come
+back byte-identical. One test reconstructs `sanitize_for_storage`'s documented
+behaviour independently, so a later addition of escaping or stripping to that
+function fails loudly rather than quietly.
+
+Two things this pass corrected in the *tests*, not the build:
+
+* The independent reconstruction forgot DEL (U+007F) and failed. That is the
+  reconstruction working — a recomputation that agrees by accident proves
+  nothing.
+* `{{constructor.constructor('alert(1)')()}}` is not flagged, and should not
+  be. It is Angular/Vue template injection; this frontend is React, whose text
+  children do not interpolate braces, and no server-side template engine
+  touches author content. Flagging it would add audit-log noise for a construct
+  that cannot execute here. Recorded in `NOT_APPLICABLE_TO_THIS_STACK` as a
+  decision with a reason rather than left as an absence — **it is a claim about
+  the stack, not the payload**, and it must shrink if a Markdown renderer is
+  ever introduced.
+
+**Analyser robustness (`test_analyser_robustness_properties.py`) — held.**
+Everything in `features`, `dosage` and `contradictions` is reached by one path:
+a transcript, which is whatever a microphone and an ASR pass produced. Totality
+and determinism asserted over the full unicode range — a generator emitting
+only ASCII would have reproduced D-090's blind spot faithfully. Determinism
+matters for the reason the 48-hour hint gives: an unstable score cannot be
+wrong, because it never says the same thing twice. Also asserts a disagreement
+is found whichever order the entries arrive in, and that a 60-entry chart
+groups to a handful of cards rather than hundreds of pairs (D-081).
+
+**Revision history (`test_revision_history_properties.py`) — held.** The
+existing tests cover one sequence: edit, edit, revert. The interesting bugs in
+version control are in the *interaction* between operations — revert-then-edit,
+revert-to-a-revert, revert-to-the-version-you-are-on. Four invariants asserted
+after every operation in a generated sequence: versions only increase, history
+is append-only and already-written versions are frozen, revert is exact, live
+content always matches its own snapshot. The frozen-versions invariant is the
+load-bearing one — highlights anchor to `source_version_number`, so a version
+whose text could change would make every provenance pointer a liar.
+
+**Log hygiene (`test_log_hygiene_properties.py`) — held.** Feedback item 3
+asked what is going out the doors nobody guards. Rather than assert "the note
+body is not in the log", this writes content containing distinctive synthetic
+identifiers and greps **every record from every logger at DEBUG**, including
+exception text, across create, edit, comment, rejected write, validation
+failure, cross-clinic refusal and the scribe pipeline. Nothing leaks. Two
+guards make the result meaningful: one asserts the detector can see log output
+at all (otherwise every assertion passes while reading nothing), and one
+asserts the logs still carry entry id, actor and action — hygiene means logging
+ids instead of content, not logging less.
+
+**Every property was mutation-checked.** A test that has never failed is a
+test whose teeth are unmeasured:
+
+| mutation | caught by |
+|---|---|
+| drop `.filter(clinic_id == ...)` | hand-written RBAC: 15 failures · enumerated matrix: **48** |
+| revert rolls the version number backwards | both hand-written and generated |
+| add one `logging.info("updating: %s", payload.content)` | log hygiene properties |
+| evaluator ranks by score, ignoring protected classes | `test_protected_classes_are_never_reported_blind` |
+
+**What generated input did not replace.** `test_the_degenerate_shapes_a_
+generator_rarely_reaches` is hand-picked on purpose: empty string, lone BOM,
+one token repeated 200 times, pure emoji. Property generation and chosen edge
+cases find different things, and using one as a reason to skip the other is how
+a blind spot acquires a rationale.
