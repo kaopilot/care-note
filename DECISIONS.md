@@ -2555,3 +2555,36 @@ with an explanation, states that saved work survived, and puts the form directly
 underneath. The session-restore probe (`me()`) is exempted via `silent401`,
 because it 401s for anyone who has simply never signed in and a first-time
 visitor should not be told their session timed out.
+
+### D-088 · Losing the network is the ordinary case, so it gets a sentence
+
+This is a PWA meant for use at the bedside and on a ward, where connectivity
+drops constantly. Every failure of that kind arrived at the clinician as the
+browser's own words — "Failed to fetch" in Chrome, something different in
+Firefox — rendered in a red line. It says nothing about whether the note saved,
+it is not stable across browsers, and on some engines it carries the full
+request URL.
+
+`fetch` rejects identically for a dropped connection, a DNS failure, a blocked
+request and a stopped server, so the wrapper now catches that rejection and
+raises an `ApiError` with `offline: true` and `status: 0` instead of letting the
+raw `TypeError` through.
+
+**The message differs for reads and writes, because the reassurance differs.**
+A failed read changed nothing and should say so. A failed write did *not* save,
+and the useful sentence is that the text is still in the box — the fear driving
+a clinician at that moment is having lost the note. Draft state already survives
+a failed save (`setDraft('')` runs only after the request succeeds), so saying
+so is true rather than hopeful.
+
+**An offline blip must not sign anyone out.** 401 handling (D-087) clears the
+session; a network failure deliberately does not, because a nurse who walks into
+a lift should not come out of it re-typing a note she already wrote. A test
+asserts the two paths stay separate.
+
+**Known gap.** There is no request queue and no retry. Work composed while
+offline is held in the form and lost if the tab closes, and nothing tells the
+user the connection has come back — they discover it by trying again. A genuine
+offline-first version needs a durable outbox, which raises its own question,
+because an outbox is unencrypted patient text sitting in browser storage on a
+shared ward device. That is the reason it is not a quick win.

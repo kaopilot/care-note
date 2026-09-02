@@ -16,11 +16,34 @@
  */
 
 export class ApiError extends Error {
-  constructor(message, status, detail) {
+  constructor(message, status, detail, { offline = false } = {}) {
     super(message)
     this.status = status
     this.detail = detail
+    // True when the request never reached the server. Distinct from every
+    // other failure: nothing was written, so retrying is safe, and the user
+    // needs telling that rather than being shown a status code.
+    this.offline = offline
   }
+}
+
+// Whether the request reached the server at all. `fetch` rejects with a bare
+// TypeError for DNS failure, a dropped connection, a blocked request and a
+// stopped server alike, so the browser's own message ("Failed to fetch" in
+// Chrome, something else in Firefox) is neither stable nor readable by a nurse
+// on a ward. This app is a PWA used at the bedside, so losing the network is
+// the ordinary case, not the exception, and it deserves a sentence someone can
+// act on. See DECISIONS.md D-088.
+function offlineError(method) {
+  const writing = method && method.toUpperCase() !== 'GET'
+  return new ApiError(
+    writing
+      ? 'Could not reach the server, so this was not saved. Your text is still here — check the connection and try again.'
+      : 'Could not reach the server. Check the connection and try again — nothing has been changed.',
+    0,
+    null,
+    { offline: true },
+  )
 }
 
 async function request(path, options = {}) {
@@ -29,14 +52,22 @@ async function request(path, options = {}) {
   // itself so it can append the multipart boundary. Setting it by hand here
   // produces a body the server cannot parse.
   const isForm = options.body instanceof FormData
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-      ...(options.headers || {}),
-    },
-  })
+  let response
+  try {
+    response = await fetch(`/api${path}`, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
+        ...(options.headers || {}),
+      },
+    })
+  } catch {
+    // Deliberately not re-raising the original: its message is
+    // browser-specific and says nothing useful, and on some engines it
+    // includes the full request URL.
+    throw offlineError(options.method)
+  }
   const clientMs = performance.now() - started
   const serverMs = Number(response.headers.get('X-Response-Time-Ms') || 0)
 

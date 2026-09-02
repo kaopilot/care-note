@@ -128,3 +128,63 @@ describe('a render crash', () => {
     expect(screen.queryByText(/stopped responding/i)).toBeNull()
   })
 })
+
+// --- the network drops, which for a bedside PWA is the ordinary case -------
+
+import { ApiError } from '../lib/api'
+
+describe('losing the network', () => {
+  const realFetch = global.fetch
+  afterEach(() => {
+    global.fetch = realFetch
+    vi.restoreAllMocks()
+  })
+
+  async function callWith(method) {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    const { api } = await import('../lib/api')
+    try {
+      await api('/patients', method ? { method } : undefined)
+      throw new Error('expected the request to fail')
+    } catch (err) {
+      return err
+    }
+  }
+
+  it('reports a dropped connection as offline, not as a status code', async () => {
+    const err = await callWith()
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.offline).toBe(true)
+    expect(err.status).toBe(0)
+  })
+
+  it('never surfaces the browser’s own wording', async () => {
+    // "Failed to fetch" is Chrome-specific, means nothing to a nurse, and on
+    // some engines carries the full request URL.
+    const err = await callWith()
+    expect(err.message).not.toMatch(/failed to fetch/i)
+    expect(err.message).not.toMatch(/\/api\//)
+  })
+
+  it('tells a writer their text was not saved and is still there', async () => {
+    const err = await callWith('POST')
+    expect(err.message).toMatch(/not saved/i)
+    expect(err.message).toMatch(/still here/i)
+  })
+
+  it('reassures a reader that nothing was changed', async () => {
+    const err = await callWith('GET')
+    expect(err.message).toMatch(/nothing has been changed/i)
+  })
+
+  it('does not mistake an offline blip for a session timeout', async () => {
+    // A 401 signs the user out. A dropped connection must not, or a nurse in a
+    // lift loses her session and retypes a note she already wrote.
+    const { onUnauthorized } = await import('../lib/api')
+    const signedOut = vi.fn()
+    const stop = onUnauthorized(signedOut)
+    await callWith('POST')
+    stop()
+    expect(signedOut).not.toHaveBeenCalled()
+  })
+})

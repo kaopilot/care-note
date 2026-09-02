@@ -129,7 +129,7 @@ database is a local SQLite file created by the test run.
 pytest tests/ -v                  # from the repository root — 596 tests
 ```
 
-596 backend tests plus 56 frontend component tests, all passing, no API key or
+596 backend tests plus 61 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -601,6 +601,12 @@ README exists not to do.
 - **No token refresh, rotation or revocation.** Logout clears the cookie; a
   token copied elsewhere stays valid until it expires (60 minutes).
 - **No login rate limiting.**
+- **No offline queue.** Network failures are reported clearly and distinguished
+  from a session timeout (D-088), but nothing retries and nothing is queued:
+  work composed while offline lives in the form and is lost if the tab closes,
+  and the user discovers the connection is back by trying again. A durable
+  outbox would mean unencrypted patient text in browser storage on a shared ward
+  device, which is why it is not a quick win.
 - **React logs raw errors to the browser console in development builds.** Our
   error boundary logs only a type and a reference (D-087), but React re-logs the
   caught error itself, message included, and that cannot be suppressed from

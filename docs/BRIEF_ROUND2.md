@@ -7,8 +7,8 @@ Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Eighteen decisions (D-070 to D-087), 168
-new tests, 596 backend and 56 component tests passing.
+6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
+new tests, 596 backend and 61 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -361,3 +361,20 @@ assumed it held".
 message included, and a boundary cannot suppress it. `Resilience.test.jsx`
 asserts that the leak happens, so it is visible in the suite rather than only in
 a document, and it will fail if React changes the behaviour.
+
+**And the one that is ordinary rather than exceptional.** This is a PWA for
+bedside use, so losing the network is not an edge case. Every such failure
+reached the clinician as the browser's own words — "Failed to fetch" — which is
+Chrome-specific, unstable across engines, and silent on the only question that
+matters mid-consult: did the note save. Reads and writes now say different
+things, because the reassurance differs: a failed read changed nothing, and a
+failed write did not save but the text is still in the box. That second claim is
+true rather than hopeful — draft state already survived a failed save, which
+this pass confirmed rather than built. An offline blip also deliberately does
+not sign anyone out, so a nurse who walks into a lift does not come out of it
+retyping a note she already wrote.
+
+What is still missing there is a queue. Nothing retries, nothing is held, and
+the honest reason it was not attempted is that a durable outbox means
+unencrypted patient text sitting in browser storage on a shared ward device —
+a data-protection decision, not an afternoon of work.
