@@ -13,14 +13,32 @@ green ticks makes every other claim in it worth less.
 ## Setup (before recording)
 
 ```bash
-cd backend && python init_db.py --reset && uvicorn app.main:app   # :8000
-cd frontend && npm run dev                                        # :5173
+# terminal 1 — API
+cd backend && source .venv/bin/activate
+python init_db.py --reset && uvicorn app.main:app          # :8000
+
+# terminal 2 — UI
+cd frontend && npm run dev                                 # :5173
+
+# terminal 3 — the one you record commands in
+cd <repo root>                                             # NOT backend/
+```
+
+**About terminal 3.** Use `./run_tests.sh` for every test command below, not
+bare `pytest`. Two things bite otherwise, and they produce different errors for
+what is really one cause: the virtualenv lives at `backend/.venv`, so a fresh
+terminal has no `pytest` on PATH (`command not found`); and `pytest.ini` sits at
+the repository root and sets `pythonpath = backend`, so running from `backend/`
+gives `file or directory not found: tests/...` even with the venv active.
+`run_tests.sh` resolves both and works from any directory. Check it before you
+record:
+
+```bash
+./run_tests.sh tests/test_survival_scenarios.py -q      # expect: 5 passed
 ```
 
 Two browser windows side by side at `localhost:5173` — **left `clinician_a`,
-right `staff_a`**, password `carenote-demo`. A terminal visible in a third pane;
-several segments run a command rather than clicking, because some of these
-claims are only checkable from a terminal.
+right `staff_a`**, password `carenote-demo`.
 
 Patient **Amira Rahman** throughout. On a fresh `--reset` her card leads with a
 penicillin allergy highlight marked **⚠ Always shown** — segment 6 depends on
@@ -31,7 +49,7 @@ that, so confirm it is there before you start.
 ## 1 — The table, honestly (~45s) · framing
 
 ```bash
-pytest tests/test_survival_scenarios.py -v
+./run_tests.sh tests/test_survival_scenarios.py -v
 ```
 
 > "Sixteen scenarios, one test each. Nine survive, six are partial, one does
@@ -59,7 +77,7 @@ Log in as her in a private window to show the passcode works.
 Then, terminal:
 
 ```bash
-pytest tests/test_clinic_config.py -v
+./run_tests.sh tests/test_clinic_config.py -v
 ```
 
 > "Scenario 5 asks config versus schema. Schema: nothing — every table already
@@ -82,7 +100,7 @@ Left window as `clinician_a`, paste Clinic B's patient id into the URL → 404.
 Terminal:
 
 ```bash
-pytest tests/test_survival_scenarios.py::test_breaking_the_single_line_exposes_every_clinic -v
+./run_tests.sh tests/test_survival_scenarios.py::test_breaking_the_single_line_exposes_every_clinic -v
 ```
 
 > "The scenario asks what happens when that line has a bug. So we drop the
@@ -97,7 +115,7 @@ pytest tests/test_survival_scenarios.py::test_breaking_the_single_line_exposes_e
 ## 4 — The doors nobody guards (scenarios 3, 4) · ~75s
 
 ```bash
-pytest tests/test_llm_chokepoint.py tests/test_url_surface.py -q
+./run_tests.sh tests/test_llm_chokepoint.py tests/test_url_surface.py -q
 ```
 
 > "Scenario 4 asks us to prove redaction runs before the model. It is not a
@@ -117,7 +135,7 @@ pytest tests/test_llm_chokepoint.py tests/test_url_surface.py -q
 
 ## 5 — The model hangs, then dies (scenarios 8, 9) · ~75s
 
-Restart the API with the outage flag:
+Restart the API with the outage flag (terminal 1, venv already active):
 
 ```bash
 CARENOTE_LLM_FORCE_UNAVAILABLE=true uvicorn app.main:app

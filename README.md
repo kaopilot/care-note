@@ -126,8 +126,22 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 596 tests
+./run_tests.sh                    # from anywhere in the repo — 596 tests
 ```
+
+Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
+backend virtualenv and the repository root as the working directory — `pytest.ini`
+lives at the root and sets `pythonpath = backend`, so running from `backend/`
+fails with `file or directory not found: tests/...` even with the venv active:
+
+```bash
+source backend/.venv/bin/activate     # the venv lives under backend/
+pytest tests/ -v                      # ...but run from the repository root
+```
+
+`run_tests.sh` exists because those two details produce two different confusing
+errors for one setup cause; it resolves both and takes the same arguments pytest
+does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
 596 backend tests plus 61 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
