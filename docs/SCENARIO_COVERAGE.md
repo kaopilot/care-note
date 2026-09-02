@@ -56,18 +56,24 @@ papering over it.
 |---|---|---|
 | Streaming real-consult audio, noisy ASR | **DOES NOT** | `ai/asr_client.py` is a fixture-backed stub. Upload is whole-file. No noise handling, no live stream. The pipeline consumes turn-structured input, so the recogniser is swappable — but nothing streams today |
 | Speaker attribution and diarization | **PARTIAL** | Speaker labels and per-segment confidence are carried end to end and drive provenance (`test_voice_capture.py`). Overlap is detected by **timing arithmetic**, not acoustics (D-047). No acoustic diarization |
-| Within-statement code-switching | **PARTIAL** | `en`/`ms` handled and tagged, including mid-sentence (`test_multilingual_features.py`). Romanised Hokkien produces no tags and is **flagged as unread** rather than silently ignored (D-072) |
+| Within-statement code-switching | **PARTIAL** | `en`/`ms` handled and tagged, including mid-sentence (`test_multilingual_features.py`). Romanised Hokkien produces no tags and is **flagged as unread** rather than silently ignored (D-072). The flag silently failed for Chinese, Japanese and Tamil until D-084 — substantiveness was measured in whitespace tokens |
 | Multilingual downstream processing | **PARTIAL** | English and Malay produce the *same canonical tags*, so one concept is one learnable feature, and the risk floor is language-independent (D-058, D-072). Only two languages |
 | Medication and dosage confirmed against references + human | **PARTIAL** | `services/dosage.py` — 17-drug adult single-dose reference; implausible doses gate patient-facing writes with a recorded human override (D-079). No formulary, no interactions, no renal/weight adjustment, no frequency parsing |
 | Immutable, version-bound provenance | **SURVIVES** | Highlights anchor to `source_version_number`; stale ones resolve against the old snapshot and render side by side with current text (D-030, D-076) |
-| Extraction under negation, correction, conflicting sources | **SURVIVES** | Negation-aware risk floor (D-072), `assertion_vs_denial` (D-073), version history as the correction record |
+| Extraction under negation, correction, conflicting sources | **PARTIAL** | Negation-aware risk floor (D-072), `assertion_vs_denial` (D-073). Spoken self-correction inside one transcript is now detected behind an explicit cue (D-083) — a correction phrased without one is not caught, and "no wait" is a pinned known miss |
 | Real-time collaborative editing without lost updates | **PARTIAL** | No lost updates — optimistic version check plus a `uq_entry_version` constraint that is the real serialisation point (D-037). **Not real-time**: no presence, no live cursors, no CRDT. Two people find out at save, not at 09:14 |
 | AI regeneration preserving human-confirmed state | **SURVIVES** | Reuses the entry so accepted highlights, comments and tasks survive; **refuses outright** when a human has edited (D-078) |
-| Contradictory human / patient / AI assertions | **SURVIVES** | Four classes, both sides cited, `human_human` marked, and deliberately never resolved (D-068, D-073) |
-| Audience-appropriate outputs | **SURVIVES** | Separate patient view in plain language with a distinct visual register; no machine text can be patient-facing at all (D-067) |
-| Self-learning: clinic-scoped, bounded, auditable, fatigue-resistant, exposure-bias evaluated | **SURVIVES** | Per-clinic weights, saturation and 90-day half-life, `NEVER_DAMPENED` floors, deterministic exploration slot, and a `/clinic/learning` endpoint that shows a clinic what it taught the system (D-041, D-069) |
+| Contradictory human / patient / AI assertions | **PARTIAL** | Five classes, both sides cited, `human_human` and `same_entry` marked, deliberately never resolved (D-068, D-073, D-083). Recall is bounded by a 17-drug watchlist, not a formulary — the failure mode is silence |
+| Audience-appropriate outputs | **PARTIAL — by refusal** | Separate patient view in plain language with a distinct visual register. The system does **not** generate per audience: no machine text can become patient-facing at all (D-067), so a clinician writes it. That is a deliberate non-implementation, not a gap we missed |
+| Self-learning: clinic-scoped, bounded, auditable, fatigue-resistant, exposure-bias evaluated | **PARTIAL** | Clinic-scoped, bounded and auditable all hold: per-clinic weights, saturation, 90-day half-life, `NEVER_DAMPENED` floors, `/clinic/learning`. **Not evaluated** — the exploration slot is per-entry novelty, not clinic feedback history, and nothing measures residual bias (D-069 corrected, D-085) |
 
-**Tally: 6 SURVIVES · 5 PARTIAL · 1 DOES NOT.**
+**Tally: 4 SURVIVES · 7 PARTIAL · 1 DOES NOT.**
+
+Four rows moved down after a post-submission audit that probed running code
+instead of re-reading the docs (D-083, D-084, D-085). Two were genuine
+overclaims, one was a defect hiding inside a claim, and one is a capability we
+declined to build on purpose and should have labelled as such. The earlier
+tally read 6 · 5 · 1.
 
 ---
 

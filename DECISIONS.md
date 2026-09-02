@@ -1785,8 +1785,25 @@ and has no mechanism for discovering it was wrong. This is a structural property
 of learning from your own output, not a tuning problem, and it was previously
 not addressed anywhere in the build.
 
-One slot per entry is reserved for a candidate carrying a tag the clinic has
-never given feedback on, when one exists and clears `MIN_SUGGESTION_SCORE`.
+One slot per entry is reserved for a candidate carrying a tag that has **not yet
+been surfaced on this entry**, when one exists and clears `MIN_SUGGESTION_SCORE`.
+
+**Read the scope of that carefully — an earlier draft of this entry overstated
+it,** and the correction matters more than the mechanism. `_keep_with_exploration`
+computes its `exposed` set from the `Highlight` rows on the entry being scored.
+That is *exposure on one entry*, not *feedback history across the clinic*:
+
+* a tag surfaced on this entry but never accepted or rejected counts as exposed,
+  even though the loop learned nothing from it;
+* a tag rejected fifty times on other entries counts as unexposed here, and will
+  take the slot again.
+
+So this is a per-entry novelty slot. It does break the narrowest version of the
+loop — a tag that never scores into the top three on any entry now gets a chance
+on entries where it is the only unexposed candidate — and it is deterministic,
+which is the property that made it shippable on a clinical surface. It is not
+clinic-wide, feedback-aware exploration, and the difference is exactly the kind
+of thing a brief should not blur.
 
 **Deterministic, not epsilon-greedy.** A coin flip would make the Glance View
 differ between two loads of the same unchanged chart. On a clinical surface that
@@ -1805,6 +1822,16 @@ surface something the rules found clinically meaningless.
 collected on surfaced items, and a tag that never appears in any entry is never
 explored. A real answer needs off-policy evaluation against held-out charts,
 which needs data this build does not have.
+
+**And it is not "evaluated for exposure bias", which is what the capability list
+actually asks for.** `test_evaluation_and_abstention.py` tests the *mechanism* —
+a slot exists, it is deterministic, it cannot surface a meaningless span. None
+of that measures how much bias remains. The measurement we would want is a
+held-out comparison: rank a set of charts with learned weights on and off, and
+report how much of the top-3 differs and which tags learning suppressed. That is
+a day of work against seeded data and it is not built. Marking this row
+SURVIVES on the strength of the mechanism alone was the overclaim; it is PARTIAL
+until there is a number.
 
 ---
 
@@ -2588,3 +2615,110 @@ user the connection has come back — they discover it by trying again. A genuin
 offline-first version needs a durable outbox, which raises its own question,
 because an outbox is unencrypted patient text sitting in browser storage on a
 shared ward device. That is the reason it is not a quick win.
+
+---
+
+## Post-submission audit — capability list re-verification
+
+Three defects found by probing the running code against the twelve-capability
+list rather than re-reading the docs. All three sat inside claims the build had
+already made, which is the pattern worth reporting: **each was invisible because
+the tests used the shape of the case the author had in mind.**
+
+### D-083 · Contradiction detection could not see inside one entry
+
+`detect()` iterated `claims_by_entry[index + 1:]` — strictly pairwise *across*
+entries, never an entry against itself. For a chart of typed notes that is the
+right call, and it was chosen deliberately: two sentences in one note were
+written by one person in one sitting, and "we could use metformin 500 or 1000"
+is deliberation, not disagreement.
+
+**It stops being the right call the moment an entry is a transcript.**
+`run_scribe` writes one Entry per consult session. A twenty-minute conversation
+collapses into one row, so every disagreement that happened *during* the consult
+was structurally undetectable — including the exact pairing scenario 7 is about:
+an allergy at minute two against a prescription at minute nineteen. The build
+had `test_capture_timing.py` asserting that the allergy is known only *after*
+the session is submitted, and that test passed while the stronger problem went
+unnoticed: after submission it was not detected either.
+
+The gap survived because both the cross-entry tests and the timing test used the
+two-entry shape. Nothing exercised one entry containing both halves.
+
+**Intra-entry comparison is now enabled, gated to three classes** — see
+`_INTRA_ENTRY_KINDS`. The gate is the design, not a caveat on it:
+
+* `allergy_vs_administration` — enabled. Nobody deliberates their way into
+  prescribing a drug the same conversation recorded an allergy to.
+* `assertion_vs_denial` — enabled. "No known allergies ... allergic to
+  penicillin" in one transcript is a reconciliation task either way.
+* `self_correction` — enabled, but **only behind an explicit correction cue**
+  ("sorry", "make that", "correction", "I meant"). Two differing doses in one
+  entry with no retraction between them is thinking out loud.
+* `status_disagreement` — **disabled intra-entry.** A consult that switches a
+  drug says stop and start about the same class constantly, and narrative
+  sequencing is indistinguishable from disagreement inside one entry.
+
+**Why a correction gets a card at all, rather than being resolved silently.**
+The later figure stands, so this is not a reconciliation task and it is rated
+MEDIUM rather than HIGH. But a *mis-heard* correction produces the identical
+string to a real one, and only a human listening to the audio can tell "make
+that 250" from a recogniser that invented the retraction. So both figures are
+shown and the card says which was said later.
+
+**Known miss, pinned as a test.** "No wait, metformin 500" is an ordinary spoken
+correction and is not caught: `_negated` sees the leading "no" ahead of the drug
+and drops the claim before any cue is consulted. Fixing it means changing
+negation scope, which `features` and `contradictions` share, for one phrase.
+`test_no_wait_is_a_known_miss_because_negation_scope_eats_it` fails on the day
+that improves.
+
+### D-084 · The abstention flag never fired for unspaced scripts
+
+D-072's argument is that silence and "I could not read this" are
+indistinguishable to a clinician, so `is_unreadable` exists to say the second
+one out loud. It measured substantiveness as `len(text.split()) >= 6`.
+
+Chinese and Japanese are written without spaces between words. A whole Mandarin
+paragraph splits into **one** token, falls under the six-word bar, and returns
+False — so the flag built to catch unreadable content never fired for two of the
+languages most likely to produce it in these clinics. The code comment beside
+`MALAY_CLINICAL_TERMS` names Mandarin as a known-uncovered language and assumes
+the abstention flag catches it. It did not. A documented gap that a second
+mechanism is silently failing to cover is worse than an undocumented one,
+because the doc reads like a control.
+
+Tamil failed differently and more quietly: a real four-word clinical sentence
+sat under a bar tuned to filter English filler ("mm-hm", "okay, right").
+
+`_substantive()` now measures per script — characters for unspaced scripts, a
+lower word bar for non-Latin spaced scripts, the original bar for Latin. The
+Latin path is byte-identical to before, so English, Malay and romanised Hokkien
+behaviour is unchanged; tests pin that.
+
+### D-085 · Two SURVIVES verdicts in the capability table did not hold
+
+Re-auditing our own answers against probe output rather than against the code we
+remembered writing:
+
+* **"Extraction under negation, correction, conflicting sources"** was marked
+  SURVIVES, justified by "version history as the correction record". Version
+  history records a *human editing a note*. It is not a *speaker correcting
+  themselves inside a transcript*, and conflating the two answered a different
+  question than the one asked. With D-083 the correction leg is now genuinely
+  implemented for spoken corrections; it is still PARTIAL, because a correction
+  without one of the recognised cues is not caught.
+* **"Self-learning ... evaluated for exposure bias"** was marked SURVIVES on the
+  strength of the exploration slot. The slot is real and the determinism
+  argument holds, but it is narrower than D-069 claimed (now corrected there)
+  and nothing *measures* the residual bias. PARTIAL.
+* **"Audience-appropriate outputs"** stays defensible but is relabelled. The
+  system does not generate for different audiences — it structurally refuses to
+  generate patient-facing text at all (D-067), which is a stronger safety
+  position and a *non-implementation* of the capability as worded. Claiming
+  SURVIVES against a capability we deliberately declined to build is the kind of
+  thing the reviewers said counts against you. Stated as a refusal, with the
+  reasoning, it is an argument. Stated as a tick, it is an overclaim.
+
+The revised tally is **4 SURVIVES · 7 PARTIAL · 1 DOES NOT**, down from
+6 · 5 · 1.
