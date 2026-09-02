@@ -8,7 +8,7 @@ Per-scenario verdicts and their tests are in
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
 6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
-new tests, 628 backend and 67 component tests passing.
+new tests, 748 backend and 67 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -454,7 +454,33 @@ Abstention tests used romanised Latin script. Exploration tests passed
 careless; each was written from inside the assumption it needed to escape, which
 is not a thing more of the same tests would have fixed.
 
-What we would do about it with more time is not "write more tests" but change
-their shape: property-based generation over transcript structure and script,
-and a mutation-testing pass, which is how we confirmed the one new test above
-actually bites. That is the honest next step, and it is not built.
+**So we changed their shape rather than their number, and it found two more.**
+Property-based generation over redaction input, and enumeration of the clinic
+boundary from the live OpenAPI schema rather than from a hand-picked list.
+
+*A phone number could hide behind an en-dash (D-095).* Every separator class in
+`redaction.py` is spelled in ASCII. `\s` is Unicode-aware so exotic spaces cost
+nothing, but the dash class is not — `hp 9123–4567` passed through untouched,
+and `find_residual_phi` reported clean. The second half is the real finding:
+that function is both the fail-closed tripwire and the oracle our property
+tests assert against, and it shares its regexes with the redactor. **A check and
+its own test must not share an implementation**, or the gap is invisible twice.
+Both now fold separators. iOS autocorrects hyphens between digits into
+en-dashes, so for a build whose premise is text arriving from phones, this was
+the ordinary path rather than the exotic one.
+
+*Clinic isolation is now enumerated, not sampled (D-096).* Against the exact
+mutation the feedback describes — deleting the `clinic_id` filter — the
+hand-written RBAC tests raise 15 failures and the enumerated matrix raises 48.
+Both catch it; only one tells you what it exposed. Building it also showed that
+sending an empty body made eleven write routes return 422, because FastAPI
+validates before the RBAC dependency runs — a test counting that as "refused"
+would have passed for the wrong reason on every write route we have.
+
+We also found a leak we chose **not** to fix: space-separated identifiers
+(`900101 01 5432`, which is what a patient reading an IC aloud transcribes to)
+survive redaction. Widening the pattern puts every run of grouped clinical
+digits at risk of becoming `[ID_1]` — trading a narrow privacy gap for a broad
+accuracy one, which is the wrong direction and exactly what the hint warned
+about. Pinned by a test that asserts current behaviour and fails the day anyone
+changes it.

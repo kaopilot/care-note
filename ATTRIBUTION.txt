@@ -246,3 +246,8 @@ in fact used. These are build-time command-line tools, not libraries: nothing in
 backend/ or frontend/ imports them, no application code depends on them, and
 their licences do not reach the source. The Markdown remains the source of
 truth; the PDF is a convenience rendering of it.
+
+hypothesis 6.167.1 — Mozilla Public License 2.0
+    Property-based testing. Generates input shapes rather than accepting the
+    ones a test author thought of; added after six defects in a row proved to
+    share that blind spot. Test-time only, not imported by application code.

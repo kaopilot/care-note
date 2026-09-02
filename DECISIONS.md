@@ -2822,3 +2822,95 @@ card under D-081, and the card's representative pair is the cross-entry one, so
 it does not show the "Within one consult" chip. The intra-entry pair is still
 carried in `also_left` with its own pointer, so both remain openable. One
 clinical disagreement is one card; the evidence behind it stays addressable.
+
+### D-095 · A phone number could hide behind an en-dash, and the tripwire agreed
+
+Found by property-based testing, which is the part worth reporting: the
+hand-written redaction tests passed, the generated ones passed, and the leak was
+still there. It took probing *shapes the generators did not produce* to surface
+it.
+
+Every separator class in `redaction.py` is spelled in ASCII — `[-.\s]`,
+`[\s-]`, `[\d\s().-]`. `\s` is Unicode-aware in Python 3, so a non-breaking or
+ideographic space costs nothing. **The dash class is not.** An en-dash, em-dash,
+figure dash or non-breaking hyphen defeated every phone pattern:
+
+    redact_phi("hp 9123–4567")  ->  "hp 9123–4567"     # unchanged
+    find_residual_phi(...)      ->  []                 # and the tripwire agreed
+
+That is not an exotic input. iOS and macOS autocorrect a hyphen between digits
+into an en-dash; so does pasting from Word or Google Docs. This build's whole
+premise is text arriving from phones and transcripts rather than typed into an
+EHR field, so the typographic form is the ordinary one.
+
+**The second half is the more useful finding.** `find_residual_phi` is both the
+fail-closed tripwire in `llm_client` *and* the oracle the property tests assert
+against — and it shares its regexes with the redactor. A pattern gap is
+therefore invisible twice: the redactor misses it, and the test that would have
+caught the miss uses the same expression to look. **A check and its own test
+must not share an implementation.** Both now fold separators, and the folding
+is asserted against un-redacted input so the tripwire is exercised
+independently.
+
+**Fix by folding, not by widening.** `_fold_separators` normalises typographic
+dashes to ASCII once, before matching. Widening six regexes to each carry the
+character class means six things that must agree forever. Dashes only —
+`\s` already covers exotic spaces, and folding anything wider risks rewriting
+clinical prose. The fold applies to the copy that goes to the model; the stored
+Entry and transcript keep the author's original characters, so the cost is a
+glyph shape in a prompt.
+
+**A second leak, found and deliberately not fixed.** Space-separated
+identifiers (`S 1234567 A`, `900101 01 5432`) are not redacted. The fix is
+riskier than the bug: tolerating internal spaces in `NRIC_RE` makes it match
+`T 1234567 B`-shaped fragments of prose, and a `\d{6}\s\d{2}\s\d{4}` MyKad
+pattern puts every run of grouped clinical digits — lab panels, vitals series —
+at risk of becoming `[ID_1]`. That trades a narrow privacy gap for a broad
+accuracy one, which is the wrong direction for a clinical record and precisely
+what the 48-hour hint warned about. It matters most on the voice path, where a
+patient reading an IC aloud is how the spaces get there; the honest mitigation
+is a cue-anchored pass over ASR output, not a wider global regex. Pinned by
+`test_space_separated_identifiers_are_a_known_leak`, which asserts the current
+behaviour and fails the day someone changes it.
+
+### D-096 · Clinic isolation is enumerated from the schema, not from memory
+
+The feedback asked what else would have caught a bug in the single line where
+clinic isolation lives. The honest answer was "the RBAC tests, on the routes
+someone thought to check" — which is the shape problem behind every other
+defect in this build, applied to the most security-critical invariant in it.
+
+`tests/test_clinic_isolation_matrix.py` reads the **live OpenAPI schema**, takes
+every operation whose path carries `{patient_id}`, and drives each one with a
+token from the wrong clinic. A route added later is covered the day it is added
+rather than the day someone remembers this file exists.
+
+Measured against the mutation the feedback describes — deleting the
+`.filter(model.clinic_id == ...)` clause:
+
+| | failures raised |
+|---|---|
+| hand-written `test_rbac_scope.py` | 15 |
+| enumerated matrix | **48** |
+
+Both catch it. The matrix localises it across every route rather than the three
+that were chosen, which is the difference between knowing a control broke and
+knowing what it exposed.
+
+**Three things the first version got wrong, all worth keeping visible:**
+
+* Sending `{}` as the body made eleven write routes return **422** — FastAPI
+  validates the body before the RBAC dependency runs, so the assertion never
+  reached authorisation. A test that counted 422 as "refused" would have passed
+  for the wrong reason on every write route in the build. The file now asserts
+  `!= 422` explicitly rather than folding it into the accepted set.
+* Sending `staff_note` for every role made a clinician's cross-clinic POST
+  return 403 for the **role** reason rather than the clinic one. RBAC has two
+  dimensions, and a test that cannot tell which one refused it is testing one.
+* Asserting home-clinic reachability on every route failed on `/my-care`, which
+  is correctly role-restricted. The vacuity guard needed an exemption list, not
+  a weaker assertion.
+
+422-before-403 is not a leak — the status is identical for a real foreign
+patient and an invented one, which the file asserts separately. It simply is not
+authorisation and cannot be counted as it.

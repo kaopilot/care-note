@@ -222,6 +222,25 @@ class _Redactor:
         if not text:
             return text
 
+        # Fold typographic separators to ASCII before anything is matched.
+        #
+        # Every pattern here spells its separator class as ASCII — `[-.\s]`,
+        # `[\s-]`, `[\d\s().-]`. `\s` is Unicode-aware in Python 3, so a
+        # non-breaking or ideographic space costs nothing. The dash class is
+        # not: an en-dash, em-dash, figure dash or non-breaking hyphen defeats
+        # every phone pattern *and* `find_residual_phi`, so "hp 9123–4567"
+        # passed through untouched with a clean tripwire.
+        #
+        # That is not an exotic input. iOS and macOS autocorrect a hyphen
+        # between digits into an en-dash, and so does pasting from Word or
+        # Google Docs — and this build's whole premise is text arriving from
+        # phones and transcripts rather than from a typed EHR field.
+        #
+        # Folding beats widening each pattern: there is one place to add a
+        # character, rather than six regexes that must agree forever. See
+        # DECISIONS.md D-095.
+        text = _fold_separators(text)
+
         # Order matters. Structured identifiers first — they are unambiguous and
         # removing them stops the looser name/phone passes from tripping on them.
         text = self._sub(EMAIL_RE, text, "email")
@@ -253,6 +272,25 @@ class _Redactor:
             pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
             text = self._sub(pattern, text, "name")
         return text
+
+
+# Typographic dashes that a phone number can arrive wearing. Folded to ASCII
+# "-" before matching so every separator class in this module only has to spell
+# one character. Deliberately dashes only: `\s` already covers exotic spaces,
+# and folding anything wider risks rewriting clinical prose.
+_DASH_CHARS = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"
+_DASH_RE = re.compile(f"[{_DASH_CHARS}]")
+
+
+def _fold_separators(text: str) -> str:
+    """Normalise typographic dashes to ASCII for matching.
+
+    Applied to the copy that goes to the model, not to what is stored: the
+    transcript and the Entry keep the author's original characters, and this
+    output is LLM input. So the cost is a hyphen shape in a prompt, and the
+    benefit is that a phone number cannot hide behind an en-dash.
+    """
+    return _DASH_RE.sub("-", text or "")
 
 
 def redact_phi(text: str) -> str:
@@ -295,5 +333,15 @@ RESIDUAL_PHI_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 
 def find_residual_phi(text: str) -> list[str]:
-    """Return the categories of any unambiguous PHI still present."""
-    return [name for name, pattern in RESIDUAL_PHI_PATTERNS if pattern.search(text or "")]
+    """Return the categories of any unambiguous PHI still present.
+
+    Folds separators first, for the same reason `run` does — and for one more.
+    This function is the tripwire *and* the oracle the property tests assert
+    against, so any pattern gap it shares with the redactor is invisible twice:
+    the redactor misses it, and the test that would have caught the miss uses
+    the same regex to look. That is exactly how "hp 9123–4567" passed with a
+    clean residual report (D-095). Folding here is what stops the tripwire
+    inheriting the redactor's blind spots.
+    """
+    folded = _fold_separators(text)
+    return [name for name, pattern in RESIDUAL_PHI_PATTERNS if pattern.search(folded)]
