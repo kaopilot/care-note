@@ -2410,3 +2410,49 @@ removed. Dismissed protected items accumulate on the card with no ageing-off
 rule. And the protected set is a six-tag vocabulary, so a critical class the
 tagger does not know is not protected: the failure mode there is silence, as
 everywhere else recall is bounded by `features.py`.
+
+### D-085 · Clinic isolation is strong, and singular — verdict downgraded to PARTIAL
+
+Scenario 2 asks two questions. We had answered the first well and the second not
+at all.
+
+*Where is it enforced?* `AccessScope.query` (`security/rbac.py`). One method,
+fused into the type routes receive, with no unscoped path available to reach for.
+D-003 argued that making enforcement impossible to forget beats making it
+redundant, and that argument still holds.
+
+*Assume that line has a bug.* We had never measured it. `test_survival_scenarios.py`
+now does, by dropping the clinic predicate and issuing real requests:
+
+    GET /patients/patient-b1  -> 200  (leaked)
+    GET /patients             -> every patient in both clinics
+
+**Nothing else catches it.** No row-level security — SQLite has none and the
+build never grew a Postgres path. No per-tenant connection or schema. No
+assertion at the serialisation boundary. Every route reaches data through that
+one method, so the blast radius of one wrong line is *every patient in every
+clinic*, and the only thing standing between that bug and production is the test
+suite.
+
+**So scenario 2 moves SURVIVES → PARTIAL.** Not because the control is weak — it
+is the strongest single control in the build — but because "enforced in exactly
+one place" and "defended in depth" are different properties, and the scenario
+asks about the second. Claiming SURVIVES answered the half we had built.
+
+**What we would add first**, in order of value per hour:
+
+1. A `before_execute` hook in `core/db.py` that refuses a SELECT against a
+   clinic-scoped table with no `clinic_id` predicate, with an explicit opt-out
+   context manager for the seed, decay and learning-rebuild jobs that legitimately
+   run cross-clinic. Independent module, independent mechanism, catches the
+   failure even when `rbac.py` is wrong.
+2. Postgres with RLS, moving the predicate below the application entirely.
+3. A response-boundary assertion that every serialised object carries the
+   caller's `clinic_id`.
+
+(1) was scoped and **deliberately not attempted** at this point in the build: it
+touches every query path in the system, and the failure mode of getting it
+subtly wrong at 11pm before a deadline is a false sense of a second layer, which
+is worse than a documented single one. The test that measures the blast radius
+was the honest thing to ship instead, and it will fail the day a real second
+layer lands — which is the right moment to revisit the verdict.

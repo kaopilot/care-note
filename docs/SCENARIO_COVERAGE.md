@@ -9,7 +9,7 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 572 backend
+pytest tests/ -q          # 584 backend
 cd frontend && npm test   # 49 component
 ```
 
@@ -20,7 +20,7 @@ cd frontend && npm test   # 49 component
 | # | Scenario | Verdict | Tests |
 |---|---|---|---|
 | 1 | Patient with no email | **SURVIVES** | `test_enrolment.py` (10) — phone as username, login issued and used, permissive validation |
-| 2 | Clinic isolation, one line | **SURVIVES** | `test_rbac_scope.py`, `test_phase1_cross_clinic.py`, `test_rbac_pattern.py` |
+| 2 | Clinic isolation, one line | **PARTIAL** | `test_rbac_scope.py`, `test_phase1_cross_clinic.py`, `test_survival_scenarios.py` — enforcement is strong and *singular*; breaking it exposes every clinic (D-085) |
 | 3 | Read your logs | **PARTIAL** | `test_failure_modes.py` (crash logs), `test_url_surface.py` (52) — a phone number was in a query string until D-083; access log still unrotated |
 | 4 | Prove the ordering | **SURVIVES** | `test_llm_chokepoint.py` (no other module may reach a model), `test_redaction.py` |
 | 5 | Clinic B on Monday | **PARTIAL** | `test_phase1_cross_clinic.py`, `test_enrolment.py`. No per-clinic config exists — see below |
@@ -33,10 +33,10 @@ cd frontend && npm test   # 49 component
 | 12 | Patient summary wrong by one dosage | **SURVIVES** | `test_delivery_state.py` (correction path), `test_regeneration_and_dosage.py` (the gate) |
 | 13 | Allergy asserted vs denied | **SURVIVES** | `test_contradiction_denial.py` (11), `test_contradiction_grouping.py` (6) — one disagreement is one card since D-081 |
 | 14 | A number that means nothing | **SURVIVES** | `test_evaluation_and_abstention.py`, `test_language_risk_floor.py` |
-| 15 | Ranking learns from what it showed | **SURVIVES** | `test_self_learning_importance.py` |
+| 15 | Ranking learns from what it showed | **SURVIVES** | `test_self_learning_importance.py`, `test_protected_surface.py` (7) — critical classes bypass ranking entirely (D-084) |
 | 16 | Highlight cites edited source | **SURVIVES** | `test_highlight_provenance.py`, `Phase9Surfaces.test.jsx` (side-by-side) |
 
-**Tally: 10 SURVIVES · 5 PARTIAL · 1 DOES NOT.**
+**Tally: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT.**
 
 Scenario 3 moved **back**, from SURVIVES to PARTIAL, after a self-audit found a
 patient's phone number travelling in a query string and therefore into the
