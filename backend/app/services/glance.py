@@ -609,6 +609,10 @@ def _contradictions(entries: list[Entry], config=None) -> list[dict]:
             "subject": item.subject,
             "detail": item.detail,
             "human_human": item.human_human,
+            # Both quotes came from one entry — a consult transcript
+            # disagreeing with itself. Without this the card renders two
+            # sources that carry the same entry id, which reads like a bug.
+            "same_entry": item.left.same_entry,
             "left": {
                 "entry_id": item.left.left_entry_id,
                 "pointer": item.left.left_pointer,

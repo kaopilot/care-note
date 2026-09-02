@@ -145,9 +145,17 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                   <span className="text-xs font-semibold text-slate-900">
                     {item.subject}
                   </span>
-                  <Chip tone={item.human_human ? 'alert' : 'info'}>
-                    {item.human_human ? 'Human vs human' : 'Involves an AI note'}
-                  </Chip>
+                  {/* A same-entry contradiction is one speaker disagreeing
+                      with themselves inside a single consult. Labelling it
+                      "Human vs human" would send a clinician looking for a
+                      second author who does not exist. */}
+                  {item.same_entry ? (
+                    <Chip tone="alert">Within one consult</Chip>
+                  ) : (
+                    <Chip tone={item.human_human ? 'alert' : 'info'}>
+                      {item.human_human ? 'Human vs human' : 'Involves an AI note'}
+                    </Chip>
+                  )}
                 </div>
                 <p className="mt-1 text-xs text-slate-800">{item.detail}</p>
                 <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
@@ -159,8 +167,13 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                       title="Open the entry this came from"
                     >
                       <span className="font-medium text-slate-500">
-                        {side.is_ai ? 'AI-scribed entry' : 'Written by a person'} ·
-                        open
+                        {item.same_entry
+                          ? sideIndex === 0
+                            ? 'Said first · open'
+                            : 'Said later · open'
+                          : `${
+                              side.is_ai ? 'AI-scribed entry' : 'Written by a person'
+                            } · open`}
                       </span>
                       <span className="mt-0.5 block italic">"{side.quote}"</span>
                     </button>

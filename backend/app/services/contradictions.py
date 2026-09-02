@@ -75,6 +75,13 @@ ALLERGY_SEVERITY = RiskLevel.CRITICAL
 DOSE_SEVERITY = RiskLevel.HIGH
 STATUS_SEVERITY = RiskLevel.MEDIUM
 
+# A speaker correcting their own dose mid-consult. MEDIUM, not HIGH: unlike a
+# dose disagreement between two authors, this one is already resolved — the
+# later figure stands — so it is a thing to verify against the audio, not a
+# reconciliation task. Rating it alongside genuine two-author conflicts would
+# dilute the level that means "nobody knows which dose is current".
+CORRECTION_SEVERITY = RiskLevel.MEDIUM
+
 # "allergic to penicillin", "penicillin allergy", "anaphylaxis to aspirin"
 _ALLERGY_CUES = (
     r"allergic to",
@@ -113,6 +120,62 @@ _ADMINISTRATION_CUES = (
 
 _STOP_CUES = (r"stopped", r"discontinued", r"held", r"ceased", r"withheld", r"stop")
 _START_CUES = (r"started", r"commenced", r"continue", r"continued", r"increased")
+
+# Someone taking back what they just said. These are the forms speech uses —
+# a typed note gets edited, so the correction never reaches the text; a spoken
+# one carries the retraction inline and the transcript keeps both figures.
+_CORRECTION_CUES = (
+    r"sorry",
+    r"correction",
+    r"i mean",
+    r"i meant",
+    r"make that",
+    r"scratch that",
+    r"let me correct",
+    r"actually,?\s+(?:it'?s|make|no)",
+    r"rather,",
+    r"that should be",
+)
+
+# NOT in the list, deliberately: "no wait". It is a real correction cue and it
+# does not work here, because `_negated` sees the leading "no" ahead of the drug
+# name and drops the claim before any cue is consulted. Making it work means
+# teaching negation scope that "no wait" is a discourse marker rather than a
+# negation — a change to a function two modules share, for one phrase.
+#
+# Left out rather than added and quietly broken. `test_intra_entry_
+# contradictions.py` pins the miss so it fails loudly if negation scope is ever
+# improved, at which point this cue should go back in. See D-083.
+
+# Which comparisons are allowed to run *inside* a single entry.
+#
+# The pairwise pass was cross-entry only, which is right for a chart of typed
+# notes: two sentences in one note were written by one person in one sitting,
+# and flagging them against each other is mostly noise ("we could try metformin
+# 500 or 1000" is deliberation, not disagreement).
+#
+# It stops being right the moment an entry is a *transcript*. `run_scribe`
+# writes one Entry per consult, so a twenty-minute conversation collapses into
+# one row — and an allergy stated at minute two against a drug prescribed at
+# minute nineteen became structurally invisible, which is the exact pairing
+# scenario 7 is about.
+#
+# So intra-entry comparison is enabled for the classes where a single speaker
+# genuinely can contradict themselves in a way that hurts, and left off for the
+# ones where narrative sequencing looks identical to disagreement:
+#
+#   * allergy vs administration — enabled. Nobody deliberates their way into
+#     prescribing a drug the same conversation recorded an allergy to.
+#   * assertion vs denial       — enabled. "No known allergies ... allergic to
+#     penicillin" in one transcript is a reconciliation task either way.
+#   * dose disagreement         — enabled ONLY behind a correction cue, and
+#     reported as a correction rather than a symmetric conflict.
+#   * status disagreement       — DISABLED. "Stop the amlodipine, continue the
+#     metformin" is one ordinary sentence, and a consult that switches a drug
+#     says stop and start about the same class constantly. See D-083.
+_INTRA_ENTRY_KINDS: frozenset[str] = frozenset(
+    {"allergy_vs_administration", "assertion_vs_denial", "self_correction"}
+)
 
 # Negation scope. Defined once in app.services.features and imported here so
 # the two consumers cannot drift into disagreeing about whether the same
@@ -182,6 +245,11 @@ class Contradiction:
     right_quote: str
     left_is_ai: bool
     right_is_ai: bool
+    # Both sides came from the same entry — almost always one consult
+    # transcript disagreeing with itself. Carried so the card can say "within
+    # one consult" rather than showing what looks like two notes and giving the
+    # same entry id twice.
+    same_entry: bool = False
 
     @property
     def human_human(self) -> bool:
@@ -225,11 +293,16 @@ class _Claim:
     sentence: str
     kind: str  # allergy | administration | start | stop
     dose: tuple[str, str] | None
+    # Index of the sentence this came from, within its entry. Only meaningful
+    # for comparisons inside one entry, where "which was said later" is the
+    # whole question: a speaker correcting their own dose supersedes, and
+    # without an order the two figures are just a symmetric disagreement.
+    position: int = 0
 
 
 def _extract_claims(text: str) -> list[_Claim]:
     claims: list[_Claim] = []
-    for sentence in _sentences(text):
+    for order, sentence in enumerate(_sentences(text)):
         for drug, position in _drug_mentions(sentence):
             if _negated(sentence, position):
                 # A denial is not nothing. If the sentence is about allergy at
@@ -239,7 +312,7 @@ def _extract_claims(text: str) -> list[_Claim]:
                 # warfarin" contradicts nothing on its own.
                 if _matches_any(sentence, _ALLERGY_CUES):
                     claims.append(
-                        _Claim(drug, MEDICATIONS[drug], sentence.strip(), "allergy_denial", None)
+                        _Claim(drug, MEDICATIONS[drug], sentence.strip(), "allergy_denial", None, order)
                     )
                 continue
             drug_class = MEDICATIONS[drug]
@@ -263,7 +336,7 @@ def _extract_claims(text: str) -> list[_Claim]:
                 kind = "dose"
             else:
                 continue
-            claims.append(_Claim(drug, drug_class, sentence.strip(), kind, dose))
+            claims.append(_Claim(drug, drug_class, sentence.strip(), kind, dose, order))
 
     # An allergy expressed without a watchlist drug name still matters —
     # "allergic to penicillin" where penicillin is not on the watchlist. Capture
@@ -271,7 +344,7 @@ def _extract_claims(text: str) -> list[_Claim]:
     # Negation is checked here too: the main loop skips a negated mention, and
     # without the same check this fallback would helpfully re-add it, turning
     # "patient denies allergy to aspirin" into a critical allergy conflict.
-    for sentence in _sentences(text):
+    for order, sentence in enumerate(_sentences(text)):
         for cue in _ALLERGY_CUES:
             match = re.search(rf"{cue}\s+([a-z][a-z\-]{{3,30}})", sentence, re.I)
             if not match:
@@ -281,14 +354,14 @@ def _extract_claims(text: str) -> list[_Claim]:
             allergen = match.group(1).lower()
             if any(c.drug == allergen for c in claims):
                 continue
-            claims.append(_Claim(allergen, "", sentence.strip(), "allergy", None))
+            claims.append(_Claim(allergen, "", sentence.strip(), "allergy", None, order))
 
     # Blanket denials. Recorded once per text: "no known allergies" said twice
     # is still one position, and two copies would produce duplicate findings
     # against the same asserted allergy.
-    for sentence in _sentences(text):
+    for order, sentence in enumerate(_sentences(text)):
         if _BLANKET_DENIAL.search(sentence):
-            claims.append(_Claim(ANY_ALLERGEN, "", sentence.strip(), "allergy_denial", None))
+            claims.append(_Claim(ANY_ALLERGEN, "", sentence.strip(), "allergy_denial", None, order))
             break
     return claims
 
@@ -315,36 +388,50 @@ def detect(entries: list[Entry]) -> list[Contradiction]:
     out: list[Contradiction] = []
     seen: set[tuple] = set()
 
+    def record(left: Entry, right: Entry, lc: _Claim, rc: _Claim, *, same_entry: bool):
+        finding = _compare(lc, rc, same_entry=same_entry)
+        if finding is None:
+            return
+        kind, severity, subject, detail, flip = finding
+        if same_entry and kind not in _INTRA_ENTRY_KINDS:
+            return
+        a, b = (right, left) if flip else (left, right)
+        ac, bc = (rc, lc) if flip else (lc, rc)
+        key = (kind, subject, a.id, b.id)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(
+            Contradiction(
+                kind=kind,
+                severity=severity,
+                subject=subject,
+                detail=detail,
+                left_entry_id=a.id,
+                right_entry_id=b.id,
+                left_pointer=entry_pointer(a.id),
+                right_pointer=entry_pointer(b.id),
+                left_quote=_quote(ac.sentence),
+                right_quote=_quote(bc.sentence),
+                left_is_ai=_is_ai(a),
+                right_is_ai=_is_ai(b),
+                same_entry=same_entry,
+            )
+        )
+
     for index, (left, left_claims) in enumerate(claims_by_entry):
+        # Inside one entry. A consult transcript is a single Entry, so without
+        # this pass every disagreement that happened *during* the consult is
+        # invisible — including an allergy at minute two against a prescription
+        # at minute nineteen. Gated to `_INTRA_ENTRY_KINDS`; see D-083.
+        for position, lc in enumerate(left_claims):
+            for rc in left_claims[position + 1 :]:
+                record(left, left, lc, rc, same_entry=True)
+
         for right, right_claims in claims_by_entry[index + 1 :]:
             for lc in left_claims:
                 for rc in right_claims:
-                    finding = _compare(lc, rc)
-                    if finding is None:
-                        continue
-                    kind, severity, subject, detail, flip = finding
-                    a, b = (right, left) if flip else (left, right)
-                    ac, bc = (rc, lc) if flip else (lc, rc)
-                    key = (kind, subject, a.id, b.id)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append(
-                        Contradiction(
-                            kind=kind,
-                            severity=severity,
-                            subject=subject,
-                            detail=detail,
-                            left_entry_id=a.id,
-                            right_entry_id=b.id,
-                            left_pointer=entry_pointer(a.id),
-                            right_pointer=entry_pointer(b.id),
-                            left_quote=_quote(ac.sentence),
-                            right_quote=_quote(bc.sentence),
-                            left_is_ai=_is_ai(a),
-                            right_is_ai=_is_ai(b),
-                        )
-                    )
+                    record(left, right, lc, rc, same_entry=False)
 
     # Most severe first; an allergy conflict must never sit below a dose one.
     order = {RiskLevel.CRITICAL: 0, RiskLevel.HIGH: 1, RiskLevel.MEDIUM: 2}
@@ -352,11 +439,16 @@ def detect(entries: list[Entry]) -> list[Contradiction]:
     return out
 
 
-def _compare(left: _Claim, right: _Claim):
+def _compare(left: _Claim, right: _Claim, *, same_entry: bool = False):
     """Compare two claims. Returns None, or (kind, severity, subject, detail, flip).
 
     `flip` puts the allergy side first when reporting, so the clinician reads
     "allergy recorded ... but given" rather than the reverse.
+
+    `same_entry` says the two claims came from one entry. It changes exactly one
+    thing — two different doses of one drug are read as a **correction** when
+    the later sentence retracts the earlier, rather than as a symmetric
+    disagreement between two authors. The caller filters the rest.
     """
     same_drug = left.drug == right.drug
     same_class = bool(left.drug_class) and left.drug_class == right.drug_class
@@ -412,6 +504,34 @@ def _compare(left: _Claim, right: _Claim):
         right_dose = _normalise_dose(right.dose)
         if left_dose and right_dose and left_dose != right_dose:
             if left_dose[1] == right_dose[1]:
+                # One speaker, one entry, two doses — and the later sentence
+                # takes the earlier one back. This is not two people
+                # disagreeing, so reporting it as one would put a clinician to
+                # work reconciling a question that is already answered. Report
+                # what happened instead: the figure was corrected, here are
+                # both, the later one stands.
+                #
+                # It still gets a card rather than being resolved silently.
+                # A transcription slip and a genuine correction produce the
+                # identical string, and only a human can tell "make that 250"
+                # from a recogniser that misheard the retraction.
+                if same_entry:
+                    earlier, later = (
+                        (left, right) if left.position <= right.position else (right, left)
+                    )
+                    if not _matches_any(later.sentence, _CORRECTION_CUES):
+                        return None
+                    return (
+                        "self_correction",
+                        CORRECTION_SEVERITY,
+                        earlier.drug,
+                        f"{earlier.drug.capitalize()} was corrected within one "
+                        f"consult — {_render_dose(earlier.dose)} first, then "
+                        f"{_render_dose(later.dose)}. The later figure stands; "
+                        f"both are shown because a mis-heard correction reads "
+                        f"exactly like a real one.",
+                        left.position > right.position,
+                    )
                 return (
                     "dose_disagreement",
                     DOSE_SEVERITY,
