@@ -51,6 +51,7 @@ from app.security import policy
 from app.services import highlights as highlight_service
 from app.services import scoring
 from app.services import learning
+from app.services import clinic_config
 from app.services import contradictions as contradiction_service
 from app.services import delivery
 from app.services import scribe
@@ -192,6 +193,9 @@ def build_glance(db: Session, *, role: Role, user_id: str, patient: Patient) -> 
 
     since = touch_view(db, user_id=user_id, patient=patient)
     names = _user_names(db, patient.clinic_id)
+    # Card volume is per-clinic (D-086). A clinic with no config row resolves
+    # to the shipped defaults, so this changes nothing until someone opts in.
+    config = clinic_config.for_clinic(db, patient.clinic_id)
 
     ai_notes = {
         note.entry_id: note
@@ -210,13 +214,13 @@ def build_glance(db: Session, *, role: Role, user_id: str, patient: Patient) -> 
         },
         "generated_at": iso_utc(_now()),
         "since": iso_utc(since),
-        "whats_new": _whats_new(entries, since, ai_notes),
-        "highlights": _top_highlights(db, patient, by_id, ai_notes, role),
+        "whats_new": _whats_new(entries, since, ai_notes, config),
+        "highlights": _top_highlights(db, patient, by_id, ai_notes, role, config),
         "open_actions": _open_actions(db, patient, names),
         "risk_flags": _risk_flags(entries),
         "confidence_flags": _confidence_flags(entries, ai_notes),
         "conflicts": _conflicts(entries, by_id),
-        "contradictions": _contradictions(entries),
+        "contradictions": _contradictions(entries, config),
         # Did anything written for the patient actually reach her? Nothing
         # here sends, so this reports honestly on reach rather than claiming
         # delivery (D-074).
@@ -253,7 +257,9 @@ def _entry_brief(entry: Entry, ai_notes: dict) -> dict:
     }
 
 
-def _whats_new(entries: list[Entry], since: datetime | None, ai_notes: dict) -> dict:
+def _whats_new(
+    entries: list[Entry], since: datetime | None, ai_notes: dict, config=None
+) -> dict:
     """Entries written since this user last really looked.
 
     This is the brief's stated pain point — "no consolidated what changed" —
@@ -265,7 +271,10 @@ def _whats_new(entries: list[Entry], since: datetime | None, ai_notes: dict) -> 
     return {
         "since": iso_utc(since),
         "count": len(fresh),
-        "entries": [_entry_brief(entry, ai_notes) for entry in fresh[:MAX_WHATS_NEW]],
+        "entries": [
+            _entry_brief(entry, ai_notes)
+            for entry in fresh[: (config.max_whats_new if config else MAX_WHATS_NEW)]
+        ],
         "first_visit": False,
     }
 
@@ -297,7 +306,12 @@ def _protected_reason(row) -> str | None:
 
 
 def _top_highlights(
-    db: Session, patient: Patient, by_id: dict[str, Entry], ai_notes: dict, role: Role
+    db: Session,
+    patient: Patient,
+    by_id: dict[str, Entry],
+    ai_notes: dict,
+    role: Role,
+    config=None,
 ) -> list[dict]:
     """Accepted highlights first, then suggestions, each by score.
 
@@ -402,7 +416,8 @@ def _top_highlights(
     suggested = [h for h in ordinary if h["status"] == str(HighlightStatus.SUGGESTED)]
 
     # Protected first and uncapped; the cap applies only to what is competing.
-    return live_protected + (accepted + suggested)[:MAX_HIGHLIGHTS] + dismissed_protected
+    cap = config.max_highlights if config else MAX_HIGHLIGHTS
+    return live_protected + (accepted + suggested)[:cap] + dismissed_protected
 
 
 def _open_actions(db: Session, patient: Patient, names: dict[str, str]) -> list[dict]:
@@ -553,7 +568,7 @@ def _confidence_flags(entries: list[Entry], ai_notes: dict) -> list[dict]:
     return out
 
 
-def _contradictions(entries: list[Entry]) -> list[dict]:
+def _contradictions(entries: list[Entry], config=None) -> list[dict]:
     """Clinical disagreements between two entries, including human-human ones.
 
     Separate from `_conflicts` on purpose. That surface reports a resolution
@@ -614,7 +629,7 @@ def _contradictions(entries: list[Entry]) -> list[dict]:
             "entry_count": item.entry_count,
             "pair_count": item.pair_count,
         }
-        for item in found[:MAX_CONTRADICTIONS]
+        for item in found[: (config.max_contradictions if config else MAX_CONTRADICTIONS)]
     ]
 
 

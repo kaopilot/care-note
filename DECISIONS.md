@@ -2456,3 +2456,55 @@ subtly wrong at 11pm before a deadline is a false sense of a second layer, which
 is worse than a documented single one. The test that measures the blast radius
 was the honest thing to ship instead, and it will fail the day a real second
 layer lands — which is the right moment to revisit the verdict.
+
+### D-086 · A clinic may change what it sees, never what it is protected from
+
+Scenario 5, which asks what breaks when Clinic B onboards and demands specificity
+about config versus schema.
+
+**Schema: nothing.** Every table already carries `clinic_id`, isolation is
+enforced in one place and tested from both directions, and the seed has run two
+clinics since Phase 1. A third clinic needs no migration. That was true before
+this decision and is the strongest part of the answer.
+
+**Config: everything, which was the problem.** Every value a clinic might
+reasonably want to differ on was a module constant shared by all tenants. "Clinic
+B keeps records for a year" was a code change, a review and a deploy. The data
+model was multi-tenant and the *product* was not.
+
+`ClinicConfig` is one optional row per clinic. Absent means the shipped defaults,
+so onboarding stays a zero-step operation — a config surface that must be
+populated before a clinic works is a new way to onboard a clinic wrongly.
+
+**The line, and the rule that draws it.** Configurable: Glance View volume
+(`max_highlights`, `max_contradictions`, `max_whats_new`) and retention windows
+(`warm_after_days`, `cold_after_days`). Not configurable, and asserted not to be
+by `test_clinic_config.py`:
+
+* redaction patterns — a clinic that *could* weaken PHI redaction eventually
+  would, under deadline pressure, and the leak would carry our name;
+* `learning.NEVER_DAMPENED` and the protected highlight classes (D-084) — a
+  per-clinic protected-classes list is a per-clinic off switch for allergy
+  protection;
+* contradiction severities — an allergy conflict is critical as a clinical fact,
+  not as a preference;
+* the dosage reference — 500mg is 500mg in every clinic.
+
+The rule: **a clinic may change what it sees, never what it is protected from.**
+Anything that could be turned down until an alert stops firing belongs on the
+left of that line.
+
+**Bounded, because a settings table is also an attack surface.** `max_highlights: 0`
+empties the Glance View and `cold_after_days: 1` archives an active chart
+overnight. Every value is clamped on read, and a cold threshold below the warm
+one is corrected rather than trusted, so a bad row degrades the card instead of
+breaking the product.
+
+**Known gaps.** Clinical *vocabulary* is still global: `features.MEDICATIONS`,
+the red-flag terms and the Malay mappings are module constants, so a paediatric
+or oncology clinic cannot add its own terms without a deploy. That is the
+largest remaining piece of scenario 5 and it is why the verdict stays PARTIAL.
+It is also the piece that needs the most care, because vocabulary additions must
+be additive only — a clinic that could *remove* a term could remove
+`entity:allergy`, which is the safety floor by another route. There is no admin
+UI or API for writing config either; rows are inserted directly today.

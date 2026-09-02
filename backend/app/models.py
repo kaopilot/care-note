@@ -537,3 +537,34 @@ class EntryArchive(Base):
     compression: Mapped[str] = mapped_column(String(20), default="none")
     original_length: Mapped[int] = mapped_column(Integer, default=0)
     archived_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ClinicConfig(Base):
+    """Per-clinic settings (Phase 9, scenario 5).
+
+    One optional row per clinic. Absent means "use the shipped defaults", which
+    is why onboarding Clinic B needs no migration and no config step — see
+    `services/clinic_config.py` for the resolver and, more importantly, for the
+    list of things that are deliberately *not* here.
+
+    Nullable columns throughout: a clinic overriding one value should not have
+    to restate the other four, and a NULL is distinguishable from a deliberate
+    setting that happens to equal the default.
+    """
+
+    __tablename__ = "clinic_configs"
+
+    clinic_id: Mapped[str] = mapped_column(
+        ForeignKey("clinics.id"), primary_key=True
+    )
+
+    # Glance View volume.
+    max_highlights: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_contradictions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_whats_new: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Retention / decay lifecycle.
+    warm_after_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cold_after_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

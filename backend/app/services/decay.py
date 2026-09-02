@@ -53,6 +53,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.core.enums import CommentStatus, DecayState, HighlightStatus, RiskLevel, TaskStatus
+from app.services import clinic_config
 from app.models import Comment, Entry, EntryArchive, Highlight, Task
 from app.services import features
 
@@ -247,8 +248,17 @@ def _protection_reason(db: Session, entry: Entry) -> str | None:
 
 
 def classify(db: Session, entry: Entry, *, now: datetime | None = None) -> Verdict:
-    """Decide what state this entry should be in. Pure — writes nothing."""
+    """Decide what state this entry should be in. Pure — writes nothing.
+
+    Retention windows are per-clinic (D-086): a chronic-disease practice and
+    a walk-in clinic want different answers, and neither preference can make
+    the system unsafe — the protection rules below are not configurable, so
+    the worst a bad window can do is archive too eagerly or hold too much.
+    """
     now = now or _now()
+    config = clinic_config.for_clinic(db, entry.clinic_id)
+    warm_after = config.warm_after_days
+    cold_after = config.cold_after_days
     age_days = int((now - _aware(entry.timestamp)).total_seconds() // 86400)
     current = str(entry.decay_state)
 
@@ -259,10 +269,10 @@ def classify(db: Session, entry: Entry, *, now: datetime | None = None) -> Verdi
             "held after a manual restore", age_days, protected=True,
         )
 
-    if age_days < WARM_AFTER_DAYS:
+    if age_days < warm_after:
         return Verdict(
             entry.id, current, str(DecayState.HOT),
-            f"{age_days}d old, under the {WARM_AFTER_DAYS}d warm threshold",
+            f"{age_days}d old, under the {warm_after}d warm threshold",
             age_days, protected=False,
         )
 
@@ -273,10 +283,10 @@ def classify(db: Session, entry: Entry, *, now: datetime | None = None) -> Verdi
             f"held at warm: {protection}", age_days, protected=True,
         )
 
-    if age_days < COLD_AFTER_DAYS:
+    if age_days < cold_after:
         return Verdict(
             entry.id, current, str(DecayState.WARM),
-            f"{age_days}d old, under the {COLD_AFTER_DAYS}d cold threshold",
+            f"{age_days}d old, under the {cold_after}d cold threshold",
             age_days, protected=False,
         )
 

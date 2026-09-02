@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (584 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (594 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -126,10 +126,10 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 584 tests
+pytest tests/ -v                  # from the repository root — 594 tests
 ```
 
-584 backend tests plus 49 frontend component tests, all passing, no API key or
+594 backend tests plus 49 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -601,6 +601,12 @@ README exists not to do.
 - **No token refresh, rotation or revocation.** Logout clears the cookie; a
   token copied elsewhere stays valid until it expires (60 minutes).
 - **No login rate limiting.**
+- **Clinical vocabulary is not per-clinic.** Volume and retention are
+  configurable per clinic (`ClinicConfig`, D-086) and onboarding needs no
+  migration, but `features.MEDICATIONS`, the red-flag terms and the Malay
+  mappings are module constants — a paediatric or oncology clinic cannot add its
+  own terms without a deploy. There is also no admin UI or API for writing
+  config; rows are inserted directly.
 - **Clinic isolation is enforced in exactly one place.** `AccessScope.query` is
   impossible to forget but has no second layer behind it: no row-level security,
   no per-tenant connection, no serialisation-boundary check. A bug in that one

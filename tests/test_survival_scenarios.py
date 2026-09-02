@@ -31,7 +31,7 @@ VERDICTS: dict[int, tuple[str, str]] = {
     2: ("PARTIAL", "test_rbac_scope.py, test_phase1_cross_clinic.py, and below"),
     3: ("PARTIAL", "test_failure_modes.py, test_url_surface.py"),
     4: ("SURVIVES", "test_llm_chokepoint.py"),
-    5: ("PARTIAL", "test_enrolment.py — no per-clinic config exists"),
+    5: ("PARTIAL", "test_clinic_config.py — vocabulary still global"),
     6: ("PARTIAL", "test_language_risk_floor.py, test_multilingual_features.py"),
     7: ("DOES NOT", "test_capture_timing.py — batch boundary pinned deliberately"),
     8: ("PARTIAL", "test_failure_modes.py — 8s timeout, no server-side abort"),

@@ -7,8 +7,8 @@ Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Sixteen decisions (D-070 to D-085), 149
-new tests, 584 backend and 49 component tests passing.
+6 · 6 · 4 in our own first assessment. Seventeen decisions (D-070 to D-086), 159
+new tests, 594 backend and 49 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -55,7 +55,7 @@ missing — which is exactly scenario 1.
 | 2 | Clinic isolation, one line | SURVIVES | **SURVIVES** — `AccessScope.query()`, three test files |
 | 3 | Read your logs | DOES NOT | **PARTIAL** — crash path fixed; a URL leak found later (§7) |
 | 4 | Prove the ordering | SURVIVES | **SURVIVES** — one exit, asserted by source scan |
-| 5 | Clinic B on Monday | PARTIAL | **PARTIAL** — enrolment built; per-clinic config still absent |
+| 5 | Clinic B on Monday | PARTIAL | **PARTIAL** — zero schema changes; config surface built, vocabulary still global |
 | 6 | Trilingual consult | PARTIAL | **PARTIAL** — parity for en/ms; Hokkien flagged, not read |
 | 7 | Allergy at minute two | DOES NOT | **DOES NOT** — batch; boundary asserted by test |
 | 8 | Model hangs 45s | PARTIAL | **PARTIAL** — 8s timeout and cancel; no server-side abort |
@@ -289,12 +289,28 @@ displaces an allergy with its own weight untouched, and one dismissal removed it
 from the card permanently. Protected classes now bypass ranking entirely
 (D-084). Learning orders the protected set; it no longer decides membership.
 
+**Identity and tenancy (theme 1), answered specifically.** Scenario 5 asks for
+config-versus-schema and the answer is now precise. *Schema: nothing* — every
+table carries `clinic_id`, isolation is enforced and tested both directions, and
+the seed has run two clinics since Phase 1, so a third needs no migration.
+*Config: everything, which was the problem* — every value a clinic might differ
+on was a module constant, so "Clinic B keeps records for a year" was a deploy.
+`ClinicConfig` (D-086) makes volume and retention per-clinic, with an absent row
+meaning defaults so onboarding stays zero-step.
+
+The more useful half was deciding what stays global. Redaction patterns, the
+protected highlight classes from D-084, contradiction severities and the dosage
+reference are all asserted *not* to be configurable, under one rule: **a clinic
+may change what it sees, never what it is protected from.** Anything that could
+be turned down until an alert stops firing sits on the left of that line. The
+gap that keeps scenario 5 at PARTIAL is clinical vocabulary, still global — and
+it is the piece needing most care, because additions must be additive only or a
+clinic could remove `entity:allergy` and reach the safety floor sideways.
+
 **Where we are still weak, plainly.** Degraded-mode behaviour (theme 4) is
 handled for the model and absent for delivery — there is no sender, so scenario
-11 cannot fully survive. Identity (theme 1) is fixed for scenario 1 and
-unfinished for scenario 5: per-clinic vocabulary, thresholds and red-flag terms
-are module constants, so onboarding Clinic B is a code change, not a config one.
-Concurrency (theme 5) loses no updates but is not real-time. And scenario 7
+11 cannot fully survive. Concurrency (theme 5) loses no updates but is not
+real-time. And scenario 7
 remains DOES NOT: the scribe is post-hoc by construction, so a drug allergy at
 minute two is not in the Glance View until the consult ends. That is an
 architecture decision, stated rather than hedged, and `test_capture_timing.py`

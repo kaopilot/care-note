@@ -9,7 +9,7 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 584 backend
+pytest tests/ -q          # 594 backend
 cd frontend && npm test   # 49 component
 ```
 
@@ -23,7 +23,7 @@ cd frontend && npm test   # 49 component
 | 2 | Clinic isolation, one line | **PARTIAL** | `test_rbac_scope.py`, `test_phase1_cross_clinic.py`, `test_survival_scenarios.py` — enforcement is strong and *singular*; breaking it exposes every clinic (D-085) |
 | 3 | Read your logs | **PARTIAL** | `test_failure_modes.py` (crash logs), `test_url_surface.py` (52) — a phone number was in a query string until D-083; access log still unrotated |
 | 4 | Prove the ordering | **SURVIVES** | `test_llm_chokepoint.py` (no other module may reach a model), `test_redaction.py` |
-| 5 | Clinic B on Monday | **PARTIAL** | `test_phase1_cross_clinic.py`, `test_enrolment.py`. No per-clinic config exists — see below |
+| 5 | Clinic B on Monday | **PARTIAL** | `test_clinic_config.py` (10), `test_phase1_cross_clinic.py` — zero schema changes, config surface now real; clinical vocabulary still global (D-086) |
 | 6 | Trilingual consult | **PARTIAL** | `test_language_risk_floor.py` (13), `test_multilingual_features.py` |
 | 7 | Allergy at minute two | **DOES NOT** | `test_capture_timing.py` (3) — pins the batch boundary deliberately |
 | 8 | Model hangs 45s | **PARTIAL** | `test_failure_modes.py::test_timeout_is_short_enough_for_a_consult` |
@@ -111,9 +111,12 @@ not against the sink that logs every request whether or not our code runs.
 2. **A sender (11).** The delivery state machine is built and one state —
    `dispatched` — is deliberately absent because nothing dispatches. Adding a
    channel slots in without disturbing `unread` / `read` / `corrected`.
-3. **Per-clinic configuration (5).** Vocabulary, red-flag terms, decay
-   thresholds and confidence bands are module constants shared by every tenant.
-   The data model is already multi-tenant; the configuration surface does not
-   exist.
+3. **Per-clinic vocabulary (5).** Volume and retention are configurable per
+   clinic since D-086, and onboarding needs no migration and no setup step. What
+   is still global is the clinical vocabulary — `features.MEDICATIONS`, red-flag
+   terms, Malay mappings — so a paediatric or oncology clinic cannot add its own
+   terms without a deploy. It needs care rather than time: additions must be
+   additive only, because a clinic that could remove a term could remove
+   `entity:allergy` and reach the safety floor sideways.
 4. **Presence (10).** Correctness holds, but two people still discover a
    collision at save rather than avoiding it at 09:14.
