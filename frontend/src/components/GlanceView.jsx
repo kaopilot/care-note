@@ -299,6 +299,23 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                           <Chip tone="human">• {entryLabel(highlight.entry_type)}</Chip>
                         )}
                         {highlight.is_manual && <Chip tone="good">Marked by clinician</Chip>}
+                        {/* An item that bypassed the ranked cut has to say so.
+                            Surfacing something unranked with no stated reason
+                            is its own trust problem — the clinician cannot tell
+                            a safety exemption from a ranking bug. */}
+                        {highlight.protected && (
+                          <Chip tone="alert" title={highlight.protected_reason}>
+                            ⚠ Always shown
+                          </Chip>
+                        )}
+                        {highlight.status === 'rejected' && (
+                          <Chip
+                            tone="neutral"
+                            title="Dismissed, but kept on the card because it is a protected clinical class. Ranking and dismissal cannot remove this."
+                          >
+                            Dismissed — kept visible
+                          </Chip>
+                        )}
                         {(highlight.status === 'accepted' || decision === 'accepted') && (
                           <Chip tone="good">✓ Confirmed</Chip>
                         )}

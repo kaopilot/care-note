@@ -2363,3 +2363,50 @@ plausible-looking route added months from now, not existing code misbehaving.
 **Known gap.** Patient and entry UUIDs are still in the access log. They are
 pseudonymous and, unlike a phone number, meaningless outside this database — a
 real deployment should still rotate and scrub, and there is no retention policy.
+
+### D-084 · A protected clinical class bypasses ranking, and survives dismissal
+
+Scenario 15. The feedback asks what stops the ranking learning to bury an
+allergy because a tired clinician swiped one away on a Tuesday. Our answer was
+`NEVER_DAMPENED` (D-041), and re-reading it against the question showed it
+**floors the wrong quantity**.
+
+`NEVER_DAMPENED` stops learning driving a protected tag's own weight below zero.
+Surfacing is a top-`MAX_HIGHLIGHTS` cut over score. So two routes to
+invisibility were still open, and neither involved dampening anything:
+
+* **Relative displacement.** Other tags rising is sufficient. A clinic that
+  interacts heavily with medication changes lifts those scores until an allergy
+  falls off the bottom of a six-slot card, its own weight untouched at zero the
+  whole time. A floor on a tag cannot reach a decision made by comparison.
+* **A single dismissal.** `_top_highlights` filtered `status != REJECTED` in the
+  query, so one rejection removed a highlight from the Glance View permanently.
+  For a suggestion about a follow-up call that is correct. For an allergy it is
+  the exact failure the scenario describes, reachable in one tap.
+
+**The fix is structural, not another weight.** Highlights whose feature tags
+intersect `learning.NEVER_DAMPENED` are surfaced regardless of rank, and a
+dismissed one is demoted to the end of the card rather than deleted from it.
+Ranking still orders the protected set; it no longer decides membership of it.
+
+**One list, not two.** The protected set *is* `NEVER_DAMPENED`, imported rather
+than restated. A second hand-maintained list of "things that matter" would drift
+from it within a phase and the drift would be silent. The two mechanisms are
+complements: one floors a learned weight, the other decides visibility, and
+neither can substitute for the other.
+
+**The exemption is visible.** Protected highlights carry `protected` and
+`protected_reason` on the wire and render an "Always shown" chip. An unranked
+item appearing with no stated reason is its own trust problem — a clinician
+cannot otherwise distinguish a safety exemption from a ranking bug.
+
+**Trade-off, stated.** On a chart with many protected findings the card grows
+past `MAX_HIGHLIGHTS`. We took that over the alternative, because a card that
+stays exactly six items long by dropping an allergy is the wrong kind of tidy.
+
+**Known gaps.** Nothing measures how often the protected set is large enough to
+be its own fatigue source — the failure mode we may have moved rather than
+removed. Dismissed protected items accumulate on the card with no ageing-off
+rule. And the protected set is a six-tag vocabulary, so a critical class the
+tagger does not know is not protected: the failure mode there is silence, as
+everywhere else recall is bounded by `features.py`.

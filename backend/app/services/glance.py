@@ -50,6 +50,7 @@ from app.core.timeutil import iso_utc
 from app.security import policy
 from app.services import highlights as highlight_service
 from app.services import scoring
+from app.services import learning
 from app.services import contradictions as contradiction_service
 from app.services import delivery
 from app.services import scribe
@@ -269,6 +270,32 @@ def _whats_new(entries: list[Entry], since: datetime | None, ai_notes: dict) -> 
     }
 
 
+def _is_protected(row) -> bool:
+    """Is this highlight in a clinical class that must never be ranked off?
+
+    The set is `learning.NEVER_DAMPENED`, reused rather than restated. Those
+    are already the classes the build has decided behaviour may promote but
+    never suppress; a second hand-maintained list of "things that matter" would
+    drift from it within a phase, and the drift would be silent.
+
+    The two mechanisms are complements, not duplicates. `NEVER_DAMPENED` floors
+    a tag's learned weight. This decides whether the item is shown at all,
+    which is the decision a weight floor cannot reach.
+    """
+    tags = set(highlight_service.decode_tags(row.feature_tags) or [])
+    return bool(tags & learning.NEVER_DAMPENED)
+
+
+def _protected_reason(row) -> str | None:
+    tags = sorted(
+        set(highlight_service.decode_tags(row.feature_tags) or []) & learning.NEVER_DAMPENED
+    )
+    if not tags:
+        return None
+    label = ", ".join(tag.split(":", 1)[-1] for tag in tags)
+    return f"Always shown ({label}) — ranking cannot remove this from the card."
+
+
 def _top_highlights(
     db: Session, patient: Patient, by_id: dict[str, Entry], ai_notes: dict, role: Role
 ) -> list[dict]:
@@ -277,12 +304,33 @@ def _top_highlights(
     Ordering by status before score is a trust decision, not a ranking
     nicety: something a clinician has already confirmed should not be pushed
     below a fresh machine guess just because the guess scored well this morning.
+
+    **Protected classes do not compete for a slot.** Ranking decides the order
+    of everything else; it does not decide whether an allergy appears. Two
+    routes made that necessary and `NEVER_DAMPENED` closed neither, because it
+    floors the wrong quantity — a tag's own learned weight — while surfacing is
+    a top-`MAX_HIGHLIGHTS` cut:
+
+    * **Relative displacement.** Flooring `entity:allergy` at zero stops
+      learning suppressing it directly. It does nothing about *other* tags
+      rising: a clinic that interacts heavily with medication changes lifts
+      those scores until the allergy falls off the bottom of a six-slot card,
+      never having been dampened at all.
+    * **One dismissal.** Rejected highlights were filtered out of the query
+      entirely, so a tired clinician dismissing an allergy suggestion on a
+      Tuesday removed it from the Glance View permanently — the exact failure
+      scenario 15 names.
+
+    So protected highlights are surfaced regardless of rank, and a dismissed
+    one is demoted rather than deleted. It stays on the card, marked as
+    dismissed, so the record of an allergy cannot be made invisible by a swipe.
+    The cost is honest: on a chart with many protected findings the card grows
+    past six. That trade is deliberate — see DECISIONS.md D-084.
     """
     rows = (
         db.query(Highlight)
         .filter(Highlight.patient_id == patient.id)
         .filter(Highlight.clinic_id == patient.clinic_id)
-        .filter(Highlight.status != HighlightStatus.REJECTED)
         .order_by(Highlight.score.desc())
         .all()
     )
@@ -329,12 +377,32 @@ def _top_highlights(
                 "is_ai_scribed": EntryType(entry.type) in AI_SCRIBED_TYPES,
                 "ai_confidence": note.confidence if note else None,
                 "can_decide": policy.can_decide_highlights(role),
+                # Why this is on the card at all. `protected` means a critical
+                # clinical class that is surfaced regardless of rank; the UI
+                # uses it to explain the exemption rather than showing an
+                # unranked item with no stated reason.
+                "protected": _is_protected(row),
+                "protected_reason": _protected_reason(row),
             }
         )
 
-    accepted = [h for h in out if h["status"] == str(HighlightStatus.ACCEPTED)]
-    suggested = [h for h in out if h["status"] == str(HighlightStatus.SUGGESTED)]
-    return (accepted + suggested)[:MAX_HIGHLIGHTS]
+    protected = [h for h in out if h["protected"]]
+    ordinary = [h for h in out if not h["protected"]]
+
+    # Dismissal removes an ordinary suggestion from the card. It cannot remove
+    # a protected one — that is the whole point — so rejected protected
+    # highlights stay, demoted below the live ones.
+    ordinary = [h for h in ordinary if h["status"] != str(HighlightStatus.REJECTED)]
+    live_protected = [h for h in protected if h["status"] != str(HighlightStatus.REJECTED)]
+    dismissed_protected = [
+        h for h in protected if h["status"] == str(HighlightStatus.REJECTED)
+    ]
+
+    accepted = [h for h in ordinary if h["status"] == str(HighlightStatus.ACCEPTED)]
+    suggested = [h for h in ordinary if h["status"] == str(HighlightStatus.SUGGESTED)]
+
+    # Protected first and uncapped; the cap applies only to what is competing.
+    return live_protected + (accepted + suggested)[:MAX_HIGHLIGHTS] + dismissed_protected
 
 
 def _open_actions(db: Session, patient: Patient, names: dict[str, str]) -> list[dict]:
