@@ -7,8 +7,8 @@ Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Seventeen decisions (D-070 to D-086), 159
-new tests, 594 backend and 49 component tests passing.
+6 · 6 · 4 in our own first assessment. Eighteen decisions (D-070 to D-087), 168
+new tests, 596 backend and 56 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -315,3 +315,49 @@ remains DOES NOT: the scribe is post-hoc by construction, so a drug allergy at
 minute two is not in the Glance View until the consult ends. That is an
 architecture decision, stated rather than hedged, and `test_capture_timing.py`
 pins the boundary rather than papering over it.
+
+
+## 9. Two failures the clinician sees, and the sinks we had not scanned
+
+A last pass over ease-of-use and leakage, asking only "what does a user
+experience when this goes wrong" rather than "does the logic hold".
+
+**A render crash white-screened the app.** There was no error boundary anywhere,
+so any component throwing unmounted the whole tree. A clinician with a patient
+in the room got a blank page — and in a clinical record a blank page is
+indistinguishable from data loss, so the recovery they reach for is retyping a
+note they never lost. The boundary now leads with *nothing you saved has been
+lost*, which is true because writes commit server-side before the response
+returns. It renders no error text at all: `error.message` can carry interpolated
+note content, and a stack trace on a shared consult-room laptop leaks in front
+of the patient.
+
+**A session timeout stranded the user.** Sessions last 60 minutes with no
+refresh flow — a deliberate security decision (D-016) that fires on a real
+clinic laptop most afternoons. The 401 surfaced as a red line reading "Token
+expired" beside a chart that had silently stopped working. A security control
+that strands people is a control people route around, so it is now handled
+centrally: the sign-in screen returns, states that saved work survived, and the
+session-restore probe is exempted so a first-time visitor is not told their
+session expired.
+
+**The sinks we had not scanned.** Server logs were governed by `log_event`, crash
+output by D-071, URLs by D-083 — and the browser console by nothing. One
+`console.log(entry)` left in during debugging puts a full note somewhere most
+deployments forward to a third-party dashboard, and the app looks identical
+either way. A scan now fails the build on any console statement outside two
+content-free allowances, and the error boundary — the one file that logs on a
+failure path — is itself pinned to logging a type name rather than a message.
+
+**What this pass confirmed rather than fixed.** Patient-role isolation holds
+across every surface we could reach: nine endpoints probed with a patient token,
+zero fragments of staff notes, clinician sections or raw AI summaries in any
+response body. The service worker is network-only for `/api`, so no patient data
+is written to disk on a shared device. Neither needed changing, and both are
+worth stating because "we checked and it held" is a different claim from "we
+assumed it held".
+
+**Known gap.** React re-logs caught errors to the console in development builds,
+message included, and a boundary cannot suppress it. `Resilience.test.jsx`
+asserts that the leak happens, so it is visible in the suite rather than only in
+a document, and it will fail if React changes the behaviour.
