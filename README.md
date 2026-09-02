@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (594 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (596 tests) ·
 `cd frontend && npm test` (25 component tests).
 
 ---
@@ -126,10 +126,10 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-pytest tests/ -v                  # from the repository root — 594 tests
+pytest tests/ -v                  # from the repository root — 596 tests
 ```
 
-594 backend tests plus 49 frontend component tests, all passing, no API key or
+596 backend tests plus 56 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -601,6 +601,12 @@ README exists not to do.
 - **No token refresh, rotation or revocation.** Logout clears the cookie; a
   token copied elsewhere stays valid until it expires (60 minutes).
 - **No login rate limiting.**
+- **React logs raw errors to the browser console in development builds.** Our
+  error boundary logs only a type and a reference (D-087), but React re-logs the
+  caught error itself, message included, and that cannot be suppressed from
+  inside a boundary. Ship production builds, and never interpolate record
+  content into an error message. A deployment forwarding the browser console to
+  a third-party dashboard inherits this.
 - **Clinical vocabulary is not per-clinic.** Volume and retention are
   configurable per clinic (`ClinicConfig`, D-086) and onboarding needs no
   migration, but `features.MEDICATIONS`, the red-flag terms and the Malay

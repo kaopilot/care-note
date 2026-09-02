@@ -190,3 +190,62 @@ def test_escape_html_neutralises_payload() -> None:
 
 def test_escape_html_escapes_quotes_for_attribute_context() -> None:
     assert '"' not in escape_html('x" onload="alert(1)')
+
+
+def test_frontend_logs_nothing_to_the_browser_console() -> None:
+    """The browser console is a leakage sink, so it gets a scan too.
+
+    `log_event` governs the server's logs and D-071 governs its crash output.
+    The client had no equivalent rule, and it is the easier place to leak: a
+    `console.log(entry)` left in during debugging puts a full note into the
+    browser console, which most real deployments forward to a third-party error
+    dashboard. Nobody notices, because the app looks identical.
+
+    Two allowances, both content-free and both deliberate:
+
+    * `ErrorBoundary.jsx` logs a type name and a reference (D-087). It must
+      never log `error.message`, which can carry interpolated note content.
+    * `main.jsx` logs a service-worker registration failure, which happens
+      before any patient data is fetched and concerns the worker, not a record.
+
+    Anything else fails, and the fix is to delete it rather than to widen this
+    list — a console statement that needs to exist in a clinical UI is rare
+    enough to be worth arguing for in DECISIONS.md.
+    """
+    allowed = {"components/ErrorBoundary.jsx", "main.jsx"}
+    console_call = re.compile(r"console\.(log|debug|info|warn|error|trace|dir|table)\s*\(")
+
+    offenders = []
+    for root in FRONTEND_SCANNED:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.suffix not in {".js", ".jsx"} or ".test." in path.name:
+                continue
+            relative = str(path.relative_to(FRONTEND_ROOT / "src"))if str(path).startswith(
+                str(FRONTEND_ROOT / "src")
+            ) else str(path.relative_to(FRONTEND_ROOT))
+            if relative in allowed:
+                continue
+            if console_call.search(path.read_text(encoding="utf-8")):
+                offenders.append(relative)
+
+    assert not offenders, (
+        f"console output in {sorted(offenders)}. The browser console is "
+        f"forwarded to error dashboards in most deployments; a logged entry or "
+        f"comment is a PHI leak. Delete the statement rather than adding it to "
+        f"the allowlist."
+    )
+
+
+def test_the_error_boundary_never_logs_the_error_message() -> None:
+    """The one file allowed to log is pinned to logging safely.
+
+    An allowlist entry that is not itself checked is just an exemption.
+    """
+    source = (FRONTEND_ROOT / "src" / "components" / "ErrorBoundary.jsx").read_text(
+        encoding="utf-8"
+    )
+    for leak in ("error.message", "errorInfo", "componentStack", "error)"):
+        assert f"console.error({leak}" not in source
+    assert "error?.name" in source, "it should log a type name and nothing richer"
