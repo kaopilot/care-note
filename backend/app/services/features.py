@@ -152,6 +152,31 @@ SUPPORTED_LANGUAGES: frozenset[str] = frozenset({"en", "ms", "en-ms", "ms-en"})
 # empty tag list means nothing is wrong.
 _SUBSTANTIVE_WORDS = 6
 
+# The same bar for a script that does not put spaces between words. Chinese and
+# Japanese are written without them, so `len(text.split())` returns 1 for a
+# whole paragraph and the substantiveness test below silently rejects it — the
+# abstention flag then never fires for exactly the languages D-072 exists to
+# catch. Counted in characters instead, at roughly two per word.
+_SUBSTANTIVE_UNSPACED_CHARS = 12
+
+# Scripts written without inter-word spaces. Not exhaustive; these are the ones
+# spoken in the clinics this build is aimed at.
+_UNSPACED_SCRIPT_RE = re.compile(
+    r"[\u3040-\u30ff"      # Hiragana, Katakana
+    r"\u3400-\u4dbf"       # CJK Extension A
+    r"\u4e00-\u9fff"       # CJK Unified Ideographs
+    r"\uf900-\ufaff"       # CJK Compatibility Ideographs
+    r"\u0e00-\u0e7f]"      # Thai
+)
+
+# A non-Latin script carrying a language tag outside the supported set cannot be
+# English small talk, which is the only thing the six-word bar exists to filter
+# out. So the bar drops — a four-word Tamil sentence about leg swelling is
+# substantive, and holding it to a threshold tuned for "mm-hm, okay, right" is
+# what let it pass unflagged.
+_NON_LATIN_RE = re.compile(r"[^\x00-\x7f\u00c0-\u024f]")
+_SUBSTANTIVE_NON_LATIN_WORDS = 3
+
 
 def _term_to_high_risk_tag() -> dict[str, str]:
     """Every surface term, in any supported language, that maps to a high tag."""
@@ -209,13 +234,41 @@ def is_unreadable(text: str, language: str | None) -> bool:
     Deliberately conservative: a turn must be substantive, produce no tags, AND
     be in a language outside the supported set. English small talk produces no
     tags either and is not a gap in understanding.
+
+    "Substantive" is measured per script rather than in whitespace-delimited
+    words. Measuring it in words alone was a defect, not a tuning choice: a
+    whole Mandarin paragraph splits into one token, fell under the six-word bar,
+    and returned False — so the flag that exists to say "there is content here I
+    could not read" stayed silent for two of the languages most likely to
+    produce unreadable content in these clinics. See `_substantive`.
     """
-    if not text or len(text.split()) < _SUBSTANTIVE_WORDS:
+    if not text or not _substantive(text):
         return False
     if language and language.lower() in SUPPORTED_LANGUAGES:
         return False
     tags, _ = tag_span(text)
     return not tags
+
+
+def _substantive(text: str) -> bool:
+    """Does this turn carry enough content that silence about it would matter?
+
+    Three bars, because one measure does not fit three writing systems:
+
+    * **Unspaced scripts** (Chinese, Japanese, Thai) are counted in characters.
+      Whitespace tokenisation reports 1 for any length of text.
+    * **Non-Latin spaced scripts** (Tamil, Devanagari, Arabic, ...) get a lower
+      word bar. The six-word bar exists to filter English filler; a script that
+      cannot be English filler does not need it.
+    * **Latin script** keeps the original bar, so romanised Hokkien and English
+      small talk are judged exactly as before.
+    """
+    if _UNSPACED_SCRIPT_RE.search(text):
+        return len(_UNSPACED_SCRIPT_RE.findall(text)) >= _SUBSTANTIVE_UNSPACED_CHARS
+    words = len(text.split())
+    if _NON_LATIN_RE.search(text):
+        return words >= _SUBSTANTIVE_NON_LATIN_WORDS
+    return words >= _SUBSTANTIVE_WORDS
 
 # Chief-complaint framing — what the visit was actually about.
 COMPLAINT_CUES: tuple[str, ...] = (

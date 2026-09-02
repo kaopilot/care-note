@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.services import features
 from app.services.features import (
     MALAY_ALLERGY_TERMS,
     MALAY_CLINICAL_TERMS,
@@ -180,3 +181,66 @@ def test_negation_is_not_handled_in_either_language(lang, text, tag):
         "an improvement — update this test and confirm it was applied to both "
         "languages, then re-measure the Glance View."
     )
+
+
+# ==========================================================================
+# The abstention flag, across writing systems
+# ==========================================================================
+#
+# `is_unreadable` is the whole of D-072: when the tagger cannot read a turn it
+# says so, rather than producing an empty tag list that is indistinguishable
+# from "nothing clinical was said". It measured substantiveness in
+# whitespace-delimited words, which is a defect and not a tuning choice —
+# Chinese and Japanese are written without spaces, so `len(text.split())`
+# returned 1 for any length of text and the flag never fired for two of the
+# languages most likely to produce unreadable content in a Singapore or
+# Malaysian clinic. Tamil failed differently: real four-word clinical sentences
+# sat under a six-word bar tuned to filter English filler.
+
+
+def test_an_unspaced_script_is_flagged_rather_than_silently_dropped():
+    """Mandarin. One whitespace token, a whole clinical sentence."""
+    text = "病人的脚肿了三天，晚上特别痛，需要看医生。"
+    assert len(text.split()) == 1, "premise: whitespace tokenisation sees one token"
+    assert features.is_unreadable(text, "zh") is True
+
+
+def test_a_non_latin_spaced_script_clears_a_lower_bar():
+    """Tamil. Four words, and a script that cannot be English small talk."""
+    assert features.is_unreadable("நோயாளிக்கு கால் வீக்கம் உள்ளது.", "ta") is True
+
+
+def test_romanised_hokkien_is_still_flagged():
+    """The original D-072 case must be unaffected by the script-aware change."""
+    assert (
+        features.is_unreadable(
+            "Bo lah, bo sio joah. Ka joah tioh e kha there thiam thiam, bo hoat tou khun.",
+            "nan",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "text,language",
+    [
+        ("Okay, right, thanks doctor.", "en"),
+        ("Patient reports swelling in the ankle and shortness of breath.", "en"),
+        ("Pesakit ada bengkak di kaki dan sesak nafas juga.", "ms"),
+        ("The swelling is worst at night — malam paling sakit, cannot sleep.", "en-ms"),
+        # Latin script, unknown language, but too short to be worth flagging.
+        # The six-word bar still applies here, unchanged.
+        ("Bo lah bo sio joah.", "nan"),
+    ],
+)
+def test_supported_and_short_content_is_not_flagged(text, language):
+    """The change must be additive. English and Malay behaviour is untouched,
+    and a five-word romanised fragment stays below the bar it was always
+    below — otherwise the flag becomes noise and stops being read."""
+    assert features.is_unreadable(text, language) is False
+
+
+def test_a_short_unspaced_fragment_is_below_the_bar():
+    """"好的" is "okay". The character bar filters CJK filler the way the word
+    bar filters English filler."""
+    assert features.is_unreadable("好的。", "zh") is False
