@@ -65,15 +65,24 @@ missing — which is exactly scenario 1.
 | 12 | Summary wrong by one dosage | PARTIAL | **SURVIVES** — correction banner and a dose gate |
 | 13 | Allergy asserted vs denied | PARTIAL | **SURVIVES** — `assertion_vs_denial` at HIGH, one card per disagreement |
 | 14 | A number that means nothing | SURVIVES | **SURVIVES** — floor now language-independent |
-| 15 | Ranking learns from what it showed | SURVIVES | **SURVIVES** — floors, exploration, inspectable |
+| 15 | Ranking learns from what it showed | SURVIVES | **PARTIAL** — floors, exploration and inspectability hold; bias now *measured* at 0.71 rather than argued (D-092) |
 | 16 | Highlight cites edited source | SURVIVES | **SURVIVES** — now side by side, both versions named |
 
-On the twelve capabilities: **6 SURVIVES · 5 PARTIAL · 1 DOES NOT.** The single
-DOES NOT is streaming ASR. The five partials are speaker diarization (timing
-arithmetic, not acoustic), code-switching and multilingual downstream (two
-languages), dosage confirmation (17 drugs, no formulary), and collaborative
-editing (no lost updates, but not real-time). Full per-row detail with the tests
-that cover each is in [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).
+On the twelve capabilities: **4 SURVIVES · 7 PARTIAL · 1 DOES NOT**, revised
+down from 6 · 5 · 1 by a second audit (§10). The single DOES NOT is streaming
+ASR. Full per-row detail with the tests that cover each is in
+[`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).
+
+**Four rows moved down, and the reasons differ.** Two were overclaims: the
+correction leg of fact extraction was justified by "version history as the
+correction record", which is a human editing a note and not a speaker correcting
+themselves in a transcript; and exposure bias was marked SURVIVES on the strength
+of a mitigation existing, when the capability asks for an evaluation. One hid a
+defect (§10). The fourth, audience-appropriate output, is a capability we
+**declined on purpose** — no machine-written text can become patient-facing at
+all (D-067) — and ticking it would have claimed a feature where we had made an
+argument. Stated as a refusal it is the stronger answer; stated as a tick it is
+the thing the feedback said counts against us.
 
 ## 3. What changed
 
@@ -194,8 +203,9 @@ visibility (D-004); and reporting contradictions without ever resolving them
 
 **Still not built, plainly:** streaming ASR, acoustic diarization, any message
 sender, per-clinic configuration, presence indicators, and a real drug database.
-Scenario 7 remains DOES NOT and `test_capture_timing.py` asserts that boundary
-rather than papering over it.
+Scenario 7's *timing* remains DOES NOT — nothing is incremental, and
+`test_capture_timing.py` asserts that boundary rather than papering over it.
+Its *detection* half was a defect rather than a boundary, and is fixed (§10).
 
 ## 7. Re-auditing our own answers
 
@@ -378,3 +388,61 @@ What is still missing there is a queue. Nothing retries, nothing is held, and
 the honest reason it was not attempted is that a durable outbox means
 unencrypted patient text sitting in browser storage on a shared ward device —
 a data-protection decision, not an afternoon of work.
+
+## 10. A second audit, and the pattern behind all six defects
+
+Section 7 reported three defects found by probing rather than re-reading. We ran
+the exercise once more against the twelve-capability list specifically. Three
+more came out — and the interesting result is not the individual bugs but that
+**all six share one cause**, which we can now state precisely.
+
+**Contradiction detection could not see inside one entry (D-089).** `detect()`
+compared entries pairwise and never an entry with itself. For typed notes that is
+correct and deliberate. But `run_scribe` writes **one Entry per consult**, so a
+twenty-minute conversation is one row — and an allergy at minute two against a
+prescription at minute nineteen was undetectable at any point in its life. Not
+during the consult (nothing is incremental, which we had documented) and not
+after it either, which we had not noticed. `test_capture_timing.py` passed the
+whole time; it asserted the timing boundary and was blind to the detection gap
+sitting beside it. Intra-entry comparison is now enabled, gated to three classes,
+with dose corrections requiring an explicit retraction cue so that clinical
+deliberation ("500 or 1000, depending on tolerance") stays quiet.
+
+**The abstention flag never fired for unspaced scripts (D-090).** `is_unreadable`
+is the whole of our answer to "the transcript is trilingual": when the tagger
+cannot read a turn it says so out loud, rather than producing an empty tag list
+that a clinician cannot distinguish from "nothing clinical was said". It measured
+substantiveness as `len(text.split()) >= 6`. Chinese and Japanese are written
+without spaces, so a whole paragraph is one token, falls under the bar, and
+returns False. The comment beside our Malay vocabulary names Mandarin as a
+known-uncovered language and rests on the abstention flag catching it. It did
+not. **A documented gap that a second mechanism is silently failing to cover is
+worse than an undocumented one, because the documentation reads like a control.**
+
+**Exposure bias had a mitigation and no measurement (D-092).** Now measured:
+displacement 0.29, exposure concentration **0.71**, blind-tag rate 0.31, zero
+protected classes displaced. The 0.71 is the bias stated as a number — five of
+seven visible slots go to tags this clinic has already given feedback on. We are
+not claiming that is a good number; we have nothing to compare it to. We are
+claiming it is a number that moves when the system changes, which is what the
+capability asks for and what an argument cannot do.
+
+**We fell into the same trap while building the measurement.** The first version
+of the evaluator ranked by score and took the top N. That is not what our Glance
+View does — D-084 surfaces protected classes regardless of rank — and measured
+that way the report claimed `entity:allergy` never reaches the card. False, and
+alarming enough that it would have gone in this brief as a finding. It is caught
+by a test that fails against the naive implementation.
+
+**The pattern, stated once.** Every one of these six defects was invisible to its
+own tests, and in each case for the same reason: **the test used the shape of the
+case its author had in mind.** Cross-entry contradiction tests used two entries.
+Abstention tests used romanised Latin script. Exploration tests passed
+`existing=[]`. The evaluator modelled the card its author assumed. None were
+careless; each was written from inside the assumption it needed to escape, which
+is not a thing more of the same tests would have fixed.
+
+What we would do about it with more time is not "write more tests" but change
+their shape: property-based generation over transcript structure and script,
+and a mutation-testing pass, which is how we confirmed the one new test above
+actually bites. That is the honest next step, and it is not built.

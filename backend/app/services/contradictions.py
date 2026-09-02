@@ -145,7 +145,7 @@ _CORRECTION_CUES = (
 #
 # Left out rather than added and quietly broken. `test_intra_entry_
 # contradictions.py` pins the miss so it fails loudly if negation scope is ever
-# improved, at which point this cue should go back in. See D-083.
+# improved, at which point this cue should go back in. See D-089.
 
 # Which comparisons are allowed to run *inside* a single entry.
 #
@@ -172,7 +172,7 @@ _CORRECTION_CUES = (
 #     reported as a correction rather than a symmetric conflict.
 #   * status disagreement       — DISABLED. "Stop the amlodipine, continue the
 #     metformin" is one ordinary sentence, and a consult that switches a drug
-#     says stop and start about the same class constantly. See D-083.
+#     says stop and start about the same class constantly. See D-089.
 _INTRA_ENTRY_KINDS: frozenset[str] = frozenset(
     {"allergy_vs_administration", "assertion_vs_denial", "self_correction"}
 )
@@ -423,7 +423,7 @@ def detect(entries: list[Entry]) -> list[Contradiction]:
         # Inside one entry. A consult transcript is a single Entry, so without
         # this pass every disagreement that happened *during* the consult is
         # invisible — including an allergy at minute two against a prescription
-        # at minute nineteen. Gated to `_INTRA_ENTRY_KINDS`; see D-083.
+        # at minute nineteen. Gated to `_INTRA_ENTRY_KINDS`; see D-089.
         for position, lc in enumerate(left_claims):
             for rc in left_claims[position + 1 :]:
                 record(left, left, lc, rc, same_entry=True)

@@ -2625,7 +2625,7 @@ list rather than re-reading the docs. All three sat inside claims the build had
 already made, which is the pattern worth reporting: **each was invisible because
 the tests used the shape of the case the author had in mind.**
 
-### D-083 · Contradiction detection could not see inside one entry
+### D-089 · Contradiction detection could not see inside one entry
 
 `detect()` iterated `claims_by_entry[index + 1:]` — strictly pairwise *across*
 entries, never an entry against itself. For a chart of typed notes that is the
@@ -2673,7 +2673,7 @@ negation scope, which `features` and `contradictions` share, for one phrase.
 `test_no_wait_is_a_known_miss_because_negation_scope_eats_it` fails on the day
 that improves.
 
-### D-084 · The abstention flag never fired for unspaced scripts
+### D-090 · The abstention flag never fired for unspaced scripts
 
 D-072's argument is that silence and "I could not read this" are
 indistinguishable to a clinician, so `is_unreadable` exists to say the second
@@ -2696,7 +2696,7 @@ lower word bar for non-Latin spaced scripts, the original bar for Latin. The
 Latin path is byte-identical to before, so English, Malay and romanised Hokkien
 behaviour is unchanged; tests pin that.
 
-### D-085 · Two SURVIVES verdicts in the capability table did not hold
+### D-091 · Two SURVIVES verdicts in the capability table did not hold
 
 Re-auditing our own answers against probe output rather than against the code we
 remembered writing:
@@ -2722,3 +2722,47 @@ remembered writing:
 
 The revised tally is **4 SURVIVES · 7 PARTIAL · 1 DOES NOT**, down from
 6 · 5 · 1.
+
+### D-092 · The exposure-bias row needed a number, not a mechanism
+
+D-069 built a mitigation for exposure bias and three tests asserting the
+mitigation exists, is deterministic, and cannot surface a meaningless span. The
+capability list asks for something else: self-learning **evaluated** for
+exposure bias. "We built a mechanism" and "we measured what it left behind" are
+different claims and the row was marked SURVIVES on the first (D-091).
+
+`services/learning_eval.py` is the second. The counterfactual is cheap because
+scoring is additive and the breakdown is persisted on every `Highlight`:
+removing the `learned` term and re-totalling gives exactly the ranking this
+clinic would have had if it had never taught the system anything. Nothing is
+re-scored, no model runs, and the result is deterministic.
+
+Four numbers, measured against the seeded chart (`scripts/eval_learning.py`):
+
+| | clinic-a | reading |
+|---|---|---|
+| `displacement_rate` | 0.29 | 2 of 7 visible slots changed. Learning is doing something, and is not doing the ranking |
+| `exposure_concentration` | 0.71 | **the bias, as a number** — 5 of 7 visible slots go to tags this clinic has already given feedback on |
+| `blind_tag_rate` | 0.31 | 8 of 26 tags in the record have never reached the card, so the loop has never had a chance to learn they matter |
+| `protected_tags_displaced` | `[]` | no protected class lost a slot to a promoted one |
+
+**0.71 is the finding.** It is not a pass mark, and we are not claiming it is a
+good number — we have nothing to compare it against. What it does is convert an
+argument into a measurement that moves when the system changes, which is the
+difference the capability list is asking about.
+
+**A trap worth reporting, because we fell into it.** The first version ranked
+highlights by score and took the top N. That is what a Glance View sounds like
+and is not what this one does — D-084 surfaces protected classes *regardless of
+rank*. Measured that way the report claimed `entity:allergy` never reaches the
+card, which is false and would have been an alarming thing to put in a brief. A
+metric that does not mirror the surface it claims to measure will manufacture
+whatever it was built to look for. `test_protected_classes_are_never_reported_
+blind` pins it, and fails against the naive implementation.
+
+**Still not off-policy evaluation.** The counterfactual is "same candidates, no
+learned term", which measures re-ranking. It cannot measure what the rules never
+generated in the first place; that needs held-out charts with known-correct
+highlights, which means labelled clinical data this build does not have and
+could not synthesise honestly. So the row stays **PARTIAL** even with the
+numbers. The measurement is real; the thing it cannot see is stated.

@@ -1090,3 +1090,24 @@ Full reasoning, including why content is deliberately **not** HTML-escaped
 before storage (clinical text contains `BP <120/80` and `dose <5mg`, and
 silently corrupting a dose is a worse bug than the XSS it would prevent), is in
 `ARCHITECTURE.md` § "Security posture" and `DECISIONS.md` D-015 to D-018.
+
+### Measuring the learning loop
+
+```bash
+python backend/init_db.py        # if you have not already
+python scripts/eval_learning.py
+```
+
+Prints, per clinic, what the learned weights actually did to the Glance View:
+`displacement_rate` (share of visible slots learning changed),
+`exposure_concentration` (share of visible slots held by tags the clinic has
+already given feedback on — this is exposure bias stated as a number),
+`blind_tag_rate` (tags in the record that have never reached the card), and
+`protected_tags_displaced` (should always be empty; a non-empty list exits
+non-zero, because it is a defect rather than a measurement).
+
+Measured on the seeded chart: displacement 0.29, exposure concentration 0.71,
+blind-tag rate 0.31, no protected classes displaced. See `DECISIONS.md` D-092
+for what these do and do not prove — in particular, this is a re-ranking
+counterfactual, not off-policy evaluation, and it cannot measure what the rules
+never surfaced in the first place.

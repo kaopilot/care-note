@@ -15,7 +15,7 @@ at minute nineteen.
 These tests pin both halves: the cases that must now fire, and the cases that
 must stay quiet. The second set is the more important one. A detector that
 flags ordinary clinical deliberation is worse than one with gaps, because it
-teaches people to dismiss the flag that matters (D-068, D-083).
+teaches people to dismiss the flag that matters (D-068, D-089).
 """
 
 from __future__ import annotations
