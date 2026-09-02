@@ -27,8 +27,8 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (596 tests) ·
-`cd frontend && npm test` (25 component tests).
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (628 tests) ·
+`cd frontend && npm test` (67 component tests).
 
 ---
 
@@ -126,7 +126,7 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-./run_tests.sh                    # from anywhere in the repo — 596 tests
+./run_tests.sh                    # from anywhere in the repo — 628 tests
 ```
 
 Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
@@ -143,7 +143,7 @@ pytest tests/ -v                      # ...but run from the repository root
 errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
-596 backend tests plus 61 frontend component tests, all passing, no API key or
+628 backend tests plus 67 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -1094,9 +1094,11 @@ silently corrupting a dose is a worse bug than the XSS it would prevent), is in
 ### Measuring the learning loop
 
 ```bash
-python backend/init_db.py        # if you have not already
 python scripts/eval_learning.py
 ```
+
+Runs from anywhere — the database path is anchored to the repo, not to your
+shell's working directory (D-093).
 
 Prints, per clinic, what the learned weights actually did to the Glance View:
 `displacement_rate` (share of visible slots learning changed),

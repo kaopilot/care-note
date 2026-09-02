@@ -8,7 +8,7 @@ Per-scenario verdicts and their tests are in
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
 6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
-new tests, 596 backend and 61 component tests passing.
+new tests, 628 backend and 67 component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -433,6 +433,18 @@ View does — D-084 surfaces protected classes regardless of rank — and measur
 that way the report claimed `entity:allergy` never reaches the card. False, and
 alarming enough that it would have gone in this brief as a finding. It is caught
 by a test that fails against the naive implementation.
+
+**One finding we did not fix, because the fix is bigger than the bug.** Keyword
+tagging has no notion of negation — "no anaphylaxis" emits `symptom:anaphylaxis`
+— which is a known limitation, pinned by a test, with a stated reason (changing
+it moves English scoring and needs the Glance View re-measured). What was *not*
+documented is its interaction with the protection list. `symptom:anaphylaxis` is
+in `NEVER_DAMPENED`, so a note explicitly ruling anaphylaxis out produces a tag
+that can never be learned down: the clinician dismisses it, and the floor
+discards the dismissal. The anti-alert-fatigue mechanism manufactures a
+permanent false positive. The safe-direction argument we made for negation
+("a ruled-out symptom is surfaced for a human to dismiss") holds for ranking and
+does not hold here, because on this path the dismissal has nowhere to go.
 
 **The pattern, stated once.** Every one of these six defects was invisible to its
 own tests, and in each case for the same reason: **the test used the shape of the

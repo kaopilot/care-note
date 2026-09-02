@@ -7,6 +7,26 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+# The default database lives beside the repo, not beside whoever's shell.
+#
+# `sqlite:///./carenote.db` resolves against the current working directory, and
+# this repo is legitimately run from two places: the README starts the server
+# from `backend/`, while `pytest`, `scripts/eval_learning.py` and
+# `scripts/bench_glance.py` all run from the root because `pytest.ini` sets
+# `pythonpath = backend`. So seeding from one directory and serving from the
+# other produced two `carenote.db` files and a server with an empty database —
+# and the symptom is a 401 on a correct password, which points at auth rather
+# than at the real cause.
+#
+# `run_tests.sh` already exists because the venv and the cwd are traps. This is
+# the same trap a third time, and the worst of the three: the others fail
+# loudly, this one silently serves the wrong data. Anchoring the default to the
+# repo root removes the class rather than documenting it again. An explicit
+# `CARENOTE_DB_URL` still wins. See DECISIONS.md D-093.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_DB_URL = f"sqlite:///{_REPO_ROOT / 'carenote.db'}"
 
 
 @dataclass(frozen=True)
@@ -17,7 +37,7 @@ class Settings:
     # long enough to survive a consult without re-login. There is deliberately
     # no refresh flow — see DECISIONS.md D-016.
     jwt_ttl_minutes: int = int(os.getenv("CARENOTE_JWT_TTL_MINUTES", "60"))
-    db_url: str = os.getenv("CARENOTE_DB_URL", "sqlite:///./carenote.db")
+    db_url: str = os.getenv("CARENOTE_DB_URL", _DEFAULT_DB_URL)
 
     # Browser sessions carry the token in an httpOnly cookie so that an XSS
     # payload cannot read it (DECISIONS.md D-016). Secure=True requires HTTPS,

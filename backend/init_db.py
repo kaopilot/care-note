@@ -361,6 +361,96 @@ def seed(reset: bool = False) -> None:
             )
         )
 
+        # -- patient-a2: the contradiction chart ------------------------
+        # Every contradiction class was true in tests and invisible in the
+        # product: the seed contained no disagreements at all, so a demo of the
+        # feature had to be narrated over an empty card. These three entries
+        # exist so the three classes render.
+        #
+        # Deliberately on patient-a2 rather than a1. The a1 Glance View is tuned
+        # for the ten-second read and its measured load time; dropping a
+        # critical contradiction banner on top of it would change what that
+        # demo is about.
+        #
+        # Written as ALREADY-REDACTED text, like every other seeded AI row.
+        _add_entry(
+            db, entry_id="entry-a2-nurse", patient_id="patient-a2", clinic_id="clinic-a",
+            author_id="u-a-staff", author_role=Role.STAFF,
+            entry_type=EntryType.STAFF_NOTE,
+            title="Allergy check",
+            content=(
+                "Allergy history taken at the desk. Patient states she is "
+                "allergic to penicillin - rash as a child."
+            ),
+            days_ago=5,
+            risk=RiskLevel.MEDIUM,
+        )
+        # Cross-entry, human vs AI: the nurse recorded an allergy, the patient
+        # told the AI she has none. Scenario 13. Neither side is resolved by
+        # the system — both are shown, and a person decides.
+        a2_session_id = "sess-a2-intake-0001"
+        a2_session = _add_entry(
+            db, entry_id="entry-a2-ai-session", patient_id="patient-a2",
+            clinic_id="clinic-a", author_id="system", author_role=Role.SYSTEM,
+            entry_type=EntryType.AI_PATIENT_SESSION_SUMMARY,
+            title="Pre-consult session (AI-scribed)",
+            content=(
+                "Patient completed the pre-consult questions. Reports no known "
+                "allergies. Main concern is a swollen ankle after football."
+            ),
+            days_ago=4,
+            provenance=session_pointer(a2_session_id),
+        )
+        db.add(
+            AIScribedNote(
+                entry_id=a2_session.id,
+                clinic_id="clinic-a",
+                session_id=a2_session_id,
+                interaction_type=InteractionType.AI_PATIENT_SESSION,
+                model_used="stub-offline-v0",
+                redaction_applied=True,
+                redaction_count=1,
+                confidence=0.71,
+            )
+        )
+        # Intra-entry, and the reason D-089 exists. One consult transcript
+        # becomes one Entry, so this row contains an allergy stated early and a
+        # prescription for the same drug class made later — the pairing that was
+        # structurally undetectable until detection could compare an entry with
+        # itself. It also carries a spoken dose correction, which is the class
+        # that only ever appears inside a transcript: a typed note gets edited,
+        # so the retraction never reaches the text.
+        a2_consult_id = "sess-a2-consult-0002"
+        a2_consult = _add_entry(
+            db, entry_id="entry-a2-ai-consult", patient_id="patient-a2",
+            clinic_id="clinic-a", author_id="system", author_role=Role.SYSTEM,
+            entry_type=EntryType.AI_DOCTOR_CONSULT_SUMMARY,
+            title="Consult summary (AI-scribed)",
+            content=(
+                "Patient mentioned early in the consult that she is allergic to "
+                "penicillin. Ankle examined - soft tissue injury, no bony "
+                "tenderness, neurovascularly intact. Wound on the shin looks "
+                "infected. I will start you on amoxicillin 500mg three times a "
+                "day for five days. Sorry, correction, make that amoxicillin "
+                "250mg three times a day. Review in one week."
+            ),
+            days_ago=1,
+            risk=RiskLevel.HIGH,
+            provenance=session_pointer(a2_consult_id),
+        )
+        db.add(
+            AIScribedNote(
+                entry_id=a2_consult.id,
+                clinic_id="clinic-a",
+                session_id=a2_consult_id,
+                interaction_type=InteractionType.DOCTOR_PATIENT_CONSULT,
+                model_used="stub-offline-v0",
+                redaction_applied=True,
+                redaction_count=1,
+                confidence=0.64,
+            )
+        )
+
         # -- one entry on patient-a2 and one in clinic B ----------------
         # patient-a2 exists so "list patients in my clinic" returns more than
         # one row; clinic B has content so cross-clinic reads have something

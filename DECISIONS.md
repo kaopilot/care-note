@@ -2766,3 +2766,59 @@ generated in the first place; that needs held-out charts with known-correct
 highlights, which means labelled clinical data this build does not have and
 could not synthesise honestly. So the row stays **PARTIAL** even with the
 numbers. The measurement is real; the thing it cannot see is stated.
+
+### D-093 · The database path follows the repo, not the shell
+
+Found by starting the server the way the README says to, from `backend/`, and
+getting **401 on a correct password**.
+
+`db_url` defaulted to `sqlite:///./carenote.db` — resolved against the current
+working directory. This repo is legitimately run from two places: the README
+starts `uvicorn` from `backend/`, while `pytest`, `scripts/eval_learning.py` and
+`scripts/bench_glance.py` all run from the root, because `pytest.ini` sets
+`pythonpath = backend`. Seed from one, serve from the other, and you get two
+`carenote.db` files and a server backed by an empty one.
+
+**The symptom points at the wrong thing.** An empty database and a wrong
+password are indistinguishable at the login endpoint, by design — D-018 returns
+one response for unknown-user and bad-password so the endpoint cannot be used to
+enumerate accounts. That is the right call and it means the first hour of
+debugging this goes into auth, which is fine. A demo is not.
+
+`run_tests.sh` exists because the venv and the cwd are traps. This is the same
+trap a third time and the worst of the three: the other two fail loudly, this
+one silently serves the wrong data. So the default is now anchored to the repo
+root via `Path(__file__).resolve()`, and an explicit `CARENOTE_DB_URL` still
+wins. Tests are unaffected — `conftest.py` sets an in-memory URL before the app
+imports.
+
+**We introduced half of it ourselves.** The `scripts/eval_learning.py`
+instructions added in D-092 said to run `python backend/init_db.py` from the
+root, which is a third working directory and disagrees with the quick-start on
+the same page. Corrected. A setup step whose correctness depends on which
+directory the reader happened to be in is a usability defect, not a
+documentation nit — it is the first thing anyone evaluating this build does.
+
+### D-094 · The contradiction classes were true in tests and invisible in the demo
+
+The seeded chart contained **no contradictions at all**. Every class was
+asserted by tests and none could be seen by running the application, so a demo
+of the headline trust feature had to be narrated over an empty card.
+
+`patient-a2` now carries a small dedicated chart: a nurse note recording a
+penicillin allergy, an AI pre-consult session where the patient reports none,
+and one AI consult summary containing both an allergy mention and a
+same-class prescription plus a spoken dose correction. That renders all three
+classes — `allergy_vs_administration` (critical), `assertion_vs_denial` (high),
+and `self_correction` (medium, `same_entry`).
+
+Deliberately not on `patient-a1`: that Glance View is tuned for the ten-second
+read and carries the measured load time, and dropping a critical contradiction
+banner on top of it would change what that demo is about.
+
+**A property worth noting, because it looks like a bug and is not.** The two
+allergy pairs — one cross-entry, one inside the consult — collapse into a single
+card under D-081, and the card's representative pair is the cross-entry one, so
+it does not show the "Within one consult" chip. The intra-entry pair is still
+carried in `also_left` with its own pointer, so both remain openable. One
+clinical disagreement is one card; the evidence behind it stays addressable.
