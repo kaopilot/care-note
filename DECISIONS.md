@@ -273,7 +273,7 @@ future contributor to form.
 **Cost:** if a later phase does need real rich text (formatting, tables), this
 decision reverses and a sanitizer becomes mandatory at that moment.
 
-### D-019 Deferred scope: translation & handwritten note capture
+### D-019 · Deferred scope: translation & handwritten note capture
 
 Considered multilingual patient summaries and OCR-based handwritten note capture. Deferred both for the 72-hour build:
 
@@ -2303,6 +2303,43 @@ is dosed in units and is excluded rather than guessed at. Frequency is not parse
 so "500mg six times daily" reads as plausible. There is no interaction checking,
 no renal or weight adjustment, and no real drug database behind it.
 
+### D-080 · A medication counts as given when it is spoken, or merely dosed
+
+*Written after the fact.* `contradictions.py` cited D-080 at two sites and no
+such record existed — found by `test_decision_references.py`, which is why that
+test exists. The decision was made and implemented; only the writing-down was
+missed. Reconstructed here from the code and its comments rather than from
+memory, and marked as such.
+
+The `allergy_vs_administration` class only fires if one side is recognised as
+*administration*. Two widenings were needed before it fired on real input:
+
+**1. Prescribing as it is spoken, not as it is written.** The original cue list
+was the vocabulary of a typed note — "prescribed", "administered", "dispensed",
+"started on". A doctor talking to a patient says *"I'll start you on
+amoxicillin"*, *"we'll put her on metformin"*, *"switching him to losartan"*.
+Found by writing scenario 7's test against a spoken transcript instead of a
+typed note: the sentence classified as a bare dose claim and never reached the
+allergy comparison at all. The cue list now carries both registers.
+
+**2. A dose with no verb is an administration.** `Metformin 1g BD` is how a
+large share of real notes record a medication — no verb, just the drug and the
+dose. Treating that as something other than "this patient is on this drug"
+would mean an allergy conflict is detected only when the author happened to
+write a verb in front of it. So `dose` joins `administration` and `start` in
+`_GIVEN`.
+
+Both widen recall in the same direction, and the direction matters: the failure
+this class exists to catch is *silence* — a penicillin allergy and an
+amoxicillin prescription sitting in one chart with nothing said. A false
+positive here is a card a clinician dismisses in one click. A false negative is
+the thing the feature was built for, not happening.
+
+This is also the record that makes D-089 legible: the same test that forced
+these widenings — scenario 7 against a spoken transcript — is the one that later
+exposed that the whole transcript lands in a single `Entry`, and that nothing
+compared an entry with itself.
+
 ### D-081 · One clinical disagreement is one card, however many entries evidence it
 
 Scenarios 13 and 15. `contradictions.detect` works pairwise. That is the right
@@ -2993,3 +3030,48 @@ generator_rarely_reaches` is hand-picked on purpose: empty string, lone BOM,
 one token repeated 200 times, pure emoji. Property generation and chosen edge
 cases find different things, and using one as a reason to skip the other is how
 a blind spot acquires a rationale.
+
+### D-098 · Documentation cross-references are tested, because one broke silently
+
+Renumbering three records that collided with existing ones (D-089–D-091) was
+done with a find-and-replace. `"D-083)" -> "D-089)"` fixed the new records and
+also rewrote two pre-existing, correct references in `SCENARIO_COVERAGE.md`.
+
+Both still resolved to a real decision, so nothing was visibly broken. The
+document simply contradicted itself two lines apart — scenario 3's row said "a
+phone number was in a query string until D-083", and the audit section below it
+called the same defect D-089. **A cross-reference that points at the wrong
+record reads exactly like a correct one**, and a reviewer following it lands on
+an unrelated decision and concludes the argument does not hold.
+
+`tests/test_decision_references.py` walks every `.md` file, backend module,
+test and script, and asserts every `D-0xx` citation resolves to exactly one
+heading. It also asserts headings are unique — the collision that started this —
+and that numbers run without gaps, because a gap usually means a record was
+deleted rather than superseded, and a decision log that loses entries is not a
+log.
+
+**It found three things a proof-read had not:**
+
+1. The two corrupted references above.
+2. `D-019`'s heading was missing the `·` separator every other record uses, so
+   it was invisible to anything reading the file structurally. Fixed rather
+   than special-cased — a format that holds 97 times and not the 98th is a
+   format that will keep costing time.
+3. **`D-080` was cited twice in `contradictions.py` and never written.** The
+   decision had been made and implemented; only the writing-down was missed. It
+   is now reconstructed from the code and its comments, and says so at the top
+   rather than pretending to be contemporaneous.
+
+The third is the one worth dwelling on. `DECISIONS.md` is the spine of this
+repo — the technical brief is assembled from it, source comments cite it to
+explain why a comparison class is gated or a regex is shaped a certain way. A
+citation to a record that does not exist is a dead end in the one document a
+reviewer is most likely to follow. It went unnoticed through two audits and 843
+passing tests, because nothing was checking documentation the way everything
+else here is checked.
+
+**What it cannot do.** It cannot tell whether a citation is *apposite* — whether
+D-081 is the right record to cite at that line. No test can. It checks that the
+target exists and is unique, which is the part that mechanises, and leaves the
+judgement where judgement belongs.

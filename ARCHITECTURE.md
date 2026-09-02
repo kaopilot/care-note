@@ -992,6 +992,51 @@ they did not walk past were *looking at the product* and *someone else using
 it*. Neither is a formality once the tests are green; on this build they were
 the only things that worked.
 
+### The same class again, and what finally changed
+
+A later audit found seven more, and the pattern held so exactly that it is worth
+naming as a property of the test suite rather than a run of bad luck. **Every
+one was invisible to its own tests because each test used the shape of the case
+its author had in mind:**
+
+| Defect | The shape the test assumed |
+|---|---|
+| Contradictions unfindable inside one entry (D-089) | every fixture used two entries; a consult transcript is one |
+| The abstention flag silent for Chinese (D-090) | every fixture was romanised Latin script |
+| A phone number hiding behind an en-dash (D-095) | every separator in every fixture was an ASCII hyphen |
+| The exposure-bias evaluator reporting a false alarm (D-092) | it modelled a top-N cut; the real card exempts protected classes |
+| Clinic isolation checked only on chosen routes (D-096) | the routes someone thought to list |
+| A 401 on a correct password (D-093) | every test used an in-memory database, so no cwd ever mattered |
+| Contradiction classes invisible in the demo (D-094) | tests asserted the classes; nothing asserted the seed contained one |
+
+None were careless. Each was written from inside the assumption it needed to
+escape, which is not a thing more tests of the same kind can fix — the blind
+spot is in the *shape selection*, not the assertion.
+
+**So the shape changed rather than the count.** Property-based generation for
+the redaction chokepoint and the analysers; enumeration from the live OpenAPI
+schema for the clinic boundary; generated operation sequences for revision
+history. Six files, `tests/*_properties.py` plus `test_clinic_isolation_matrix.py`.
+
+Two of them found leaks. Four held — which is also a result, and the reason the
+two findings are credible.
+
+**One lesson generalises past this build.** `find_residual_phi` is the
+fail-closed tripwire in `llm_client` *and* the oracle the redaction property
+tests assert against, and it shared its regexes with the redactor. So the
+en-dash gap was invisible twice: the redactor missed it, and the test that
+would have caught the miss used the same expression to look. **A check and its
+own test must not share an implementation.** That is a structural rule of the
+same kind as the fused role-and-clinic dependency, and it is now enforced the
+same way — the tripwire folds separators independently, and a test asserts it
+fires on input the redactor never saw.
+
+Both methods that worked before still work, and neither was replaced. Looking at
+the product is what found the empty contradiction seed and the 401; no property
+test would have. Running the server the way the README says to is what found the
+working-directory trap. Generated input is a third method, not a substitute for
+the other two.
+
 ---
 
 ## Phase 8 components — evaluation and abstention

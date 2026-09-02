@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (843 tests) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (957 tests) ·
 `cd frontend && npm test` (67 component tests).
 
 ---
@@ -126,7 +126,7 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-./run_tests.sh                    # from anywhere in the repo — 843 tests
+./run_tests.sh                    # from anywhere in the repo — 957 tests
 ```
 
 Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
@@ -143,7 +143,7 @@ pytest tests/ -v                      # ...but run from the repository root
 errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
-843 backend tests plus 67 frontend component tests, all passing, no API key or
+957 backend tests plus 67 frontend component tests, all passing, no API key or
 network required. Roughly 38 seconds.
 
 To run just the four files the brief names:
@@ -160,7 +160,8 @@ pytest tests/test_voice_capture.py -v              # BONUS — ambient consult c
 **Scenario coverage.** [`docs/SCENARIO_COVERAGE.md`](docs/SCENARIO_COVERAGE.md)
 maps all sixteen clinic scenarios and the twelve-capability list to the tests
 that cover them, each with a verdict. Current tally: **11 SURVIVES · 4 PARTIAL ·
-1 DOES NOT** on the scenarios, **6 · 5 · 1** on the capabilities.
+1 DOES NOT** on the scenarios, **4 · 7 · 1** on the capabilities — revised down
+from 6 · 5 · 1 by a post-submission audit (`DECISIONS.md` D-091).
 
 The files from the clinic-scenario review:
 
@@ -192,12 +193,139 @@ the fixes described in `DECISIONS.md` D-059 through D-062. Ten of its fifteen
 tests fail against the Phase 6 code. That is deliberate — a regression test that
 has never failed only describes what the code does today.
 
+### Property-based tests
+
+```bash
+pytest tests/ -v -k properties     # all five files, ~15 seconds
+```
+
+Five files whose names end in `_properties.py`. They exist because of a pattern
+that only became visible after two audit rounds: **seven defects were found in
+this build, and every one was invisible to its own tests for the same reason —
+each test used the shape of the case its author had in mind.**
+
+Cross-entry contradiction tests used two entries, so a one-entry transcript was
+invisible. Abstention tests used romanised Latin script, so Chinese never fired.
+The exposure-bias evaluator modelled the card its author assumed rather than the
+card the product renders. None of those were careless; each was written from
+inside the assumption it needed to escape, and more tests of the same kind would
+not have caught any of them. The blind spot is in the shape selection, not the
+assertion — so these tests do not select shapes.
+
+| File | Property asserted | Result |
+|---|---|---|
+| `test_redaction_properties.py` | No unambiguous PHI survives the chokepoint; clinical values survive it unchanged | **found 2 leaks** |
+| `test_clinic_isolation_matrix.py` | No role reaches another clinic's patient, on every patient-scoped route in the live OpenAPI schema | held |
+| `test_content_roundtrip_properties.py` | What an author writes is what the record returns, byte for byte | held |
+| `test_analyser_robustness_properties.py` | The analysers never raise and never disagree with themselves | held |
+| `test_revision_history_properties.py` | Version invariants hold after *every* operation in a generated edit/revert sequence | held |
+| `test_log_hygiene_properties.py` | No content reaches any logger, at any level, on any path | held |
+
+**Four held and two found leaks, and both halves of that are the result.**
+"We looked here and it was sound" is what makes the failures credible.
+
+#### The two leaks
+
+*A phone number could hide behind an en-dash* (D-095). Every separator class in
+`redaction.py` is spelled in ASCII. `\s` is Unicode-aware so exotic spaces cost
+nothing, but the dash class is not — `hp 9123–4567` passed through untouched.
+iOS and macOS autocorrect a hyphen between digits into an en-dash, and so does
+pasting from Word, so for a build whose premise is text arriving from phones
+this was the ordinary path rather than the exotic one.
+
+The second half is the more useful finding: `find_residual_phi` is both the
+fail-closed tripwire in `llm_client` **and** the oracle these property tests
+assert against, and it shared its regexes with the redactor. A pattern gap was
+therefore invisible twice — the redactor missed it, and the test that would have
+caught the miss used the same expression to look. **A check and its own test
+must not share an implementation.** Both now fold separators, and the fold is
+asserted against un-redacted input so the tripwire is exercised independently.
+
+*Space-separated identifiers are still a leak, deliberately.* `S 1234567 A` and
+`900101 01 5432` are not redacted — and the second is exactly what a patient
+reading an IC number aloud transcribes to, which makes it a voice-path problem
+rather than a typing one. Not fixed, because the fix is riskier than the bug:
+tolerating internal spaces in `NRIC_RE` makes it match `T 1234567 B`-shaped
+fragments of prose, and a `\d{6}\s\d{2}\s\d{4}` MyKad pattern puts every run
+of grouped clinical digits — lab panels, vitals series — at risk of becoming
+`[ID_1]`. That trades a narrow privacy gap for a broad accuracy one, which is
+the wrong direction for a clinical record. Pinned by
+`test_space_separated_identifiers_are_a_known_leak`, which asserts the *current*
+behaviour and fails the day anyone changes it, so the trade-off gets re-argued
+rather than silently won.
+
+#### Two properties that pull against each other
+
+`test_redaction_properties.py` and `test_content_roundtrip_properties.py` each
+assert a pair of opposing invariants on purpose, because a regex chokepoint can
+trivially win either one alone:
+
+- **Under-redaction** is a privacy breach: an IC number reaches the model.
+- **Over-redaction** is a clinical safety problem: `[PHONE_1]` where the note
+  said `BP 120/80`. The note still reads as a sentence. It is just wrong, and
+  nobody can tell by reading it.
+
+The 48-hour hint said "redaction is accuracy, not just privacy". That is one
+sentence naming two failure modes, and testing only the first is how a build
+ends up destroying clinical values while reporting a clean privacy posture. So
+`BP <120/80`, `dose <5mg`, `metformin 500mg BD` and eleven other clinical
+literals are asserted to survive both the redactor and storage untouched.
+
+#### What generated input did not replace
+
+`test_the_degenerate_shapes_a_generator_rarely_reaches` is hand-picked on
+purpose: empty string, whitespace only, a lone BOM, one token repeated 200
+times, pure emoji. Hypothesis rarely produces those. Property generation and
+chosen edge cases find different things, and using one as a reason to skip the
+other is how a blind spot acquires a rationale.
+
+Each file also carries a **guard on the guard** — one test asserting the test
+apparatus works. `test_the_canary_would_actually_be_detected` logs a known
+string and asserts the log reader sees it, because if `caplog` were
+misconfigured every other assertion in that file would pass while reading
+nothing at all. `test_the_enumeration_found_the_routes_at_all` asserts the
+schema walk returned routes, because a parametrised test over an empty list is
+a green tick that ran nothing.
+
+### Documentation is tested too
+
+```bash
+pytest tests/test_decision_references.py -v
+```
+
+`DECISIONS.md` is the spine of this repo — the brief is assembled from it, and
+source comments cite it to explain why a whole comparison class is gated or a
+regex is shaped the way it is. A citation that points at the wrong record reads
+exactly like a correct one and sends a reviewer to an unrelated decision.
+
+That is not hypothetical here. Renumbering three records that collided with
+existing ones was done with a find-and-replace, and `"D-083)" -> "D-089)"`
+rewrote two pre-existing correct references as well as the intended ones. Both
+still resolved, so nothing looked broken — `SCENARIO_COVERAGE.md` simply
+contradicted itself two lines apart, calling one defect D-083 in a table and
+D-089 in the prose below it.
+
+The test walks every `.md` file, every backend module and every test, and
+asserts each `D-0xx` citation resolves to exactly one heading. It found three
+things a proof-read had not:
+
+- two references corrupted by that find-and-replace;
+- `D-019`, whose heading was missing the `·` separator every other record uses,
+  so it was invisible to any tool reading the file structurally;
+- **`D-080`, cited twice in `contradictions.py` and never written.** The
+  decision had been made and implemented — spoken prescribing language counts
+  as administration, and so does a bare dose — but only the writing-down was
+  missed. Reconstructed from the code and marked as written after the fact.
+
+It cannot check that a citation is *apposite*; no test can. It checks that the
+target exists and is unique, which is the part that mechanises.
+
 ### Frontend component tests
 
 ```bash
 cd frontend
 npm install
-npm test                          # vitest run — 25 tests, ~3 seconds
+npm test                          # vitest run — 67 tests, ~9 seconds
 npm run test:watch                # while working on a component
 ```
 
@@ -218,9 +346,11 @@ rendering, neither of which needs a compositor. Two files:
 The suites are independent: `pytest` needs no npm install, `vitest` needs no
 running backend.
 
-⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` uses pytest's `caplog`
-fixture to prove that no prompt text reaches the logs; disabling the logging
-plugin errors that test rather than skipping it.
+⚠️ Do not pass `-p no:logging`. `test_llm_chokepoint.py` and
+`test_log_hygiene_properties.py` both use pytest's `caplog` fixture to prove no
+content reaches the logs; disabling the logging plugin errors those tests
+rather than skipping them — which is the worst available outcome, since a
+disabled privacy check and a passing one look identical in a summary line.
 
 A captured run is saved at [`docs/PHASE3_TEST_EVIDENCE.md`](docs/PHASE3_TEST_EVIDENCE.md).
 
@@ -250,6 +380,11 @@ mistaken for coverage.
 | Disable the decay protection rules | 5 in `test_data_decay.py` |
 | Exclude cold entries from scoring entirely | 1 in `test_data_decay.py` |
 | Truncate instead of extracting when summarising | 1 in `test_data_decay.py` |
+| Remove the clinic filter *(again, against the enumerated matrix)* | **48** in `test_clinic_isolation_matrix.py` |
+| Make revert roll `version_number` backwards | 7 in `test_revision_history.py`, 1 in `test_revision_history_properties.py` |
+| Add one `logging.info("updating: %s", payload.content)` | 1 in `test_log_hygiene_properties.py` |
+| Rank highlights by score, ignoring the protected-class exemption | 1 in `test_learning_eval.py` |
+| Fold separators for detection but not in the tripwire | 8 in `test_redaction_properties.py` |
 
 | File | Covers |
 |---|---|
@@ -268,6 +403,15 @@ mistaken for coverage.
 | `tests/test_phase2_core.py` | Scribe redaction, Glance View contents, staleness, conflict rule |
 | `tests/test_self_learning_importance.py` | **Required (bonus).** Adaptive prioritisation end to end, its boundaries, and what it refuses to learn |
 | `tests/test_data_decay.py` | Reversible compression, protection rules, provenance survival across the decay boundary |
+| `tests/test_redaction_properties.py` | Generated PHI in generated prose; clinical values survive; the separator fold (D-095) |
+| `tests/test_clinic_isolation_matrix.py` | Every patient-scoped route in the live schema × every role, against the clinic boundary (D-096) |
+| `tests/test_content_roundtrip_properties.py` | Byte-identical write/read round trip; markers are metadata, never edits (D-097) |
+| `tests/test_analyser_robustness_properties.py` | Totality and determinism for `features`, `dosage`, `contradictions` over full Unicode |
+| `tests/test_revision_history_properties.py` | Version invariants after every operation in a generated edit/revert sequence |
+| `tests/test_log_hygiene_properties.py` | Synthetic identifiers greped from every logger at DEBUG, including exception text |
+| `tests/test_intra_entry_contradictions.py` | Disagreements *inside* one transcript, and the classes deliberately left quiet (D-089) |
+| `tests/test_learning_eval.py` | The exposure-bias measurement, and the naive top-N bug it was built with (D-092) |
+| `tests/test_decision_references.py` | Every `D-0xx` citation in the repo resolves to a real, unique decision (D-098) |
 
 ### What the required tests found
 
@@ -737,7 +881,7 @@ README exists not to do.
   items the system chose to surface. Closing it properly needs off-policy
   evaluation against held-out charts.
 - **Frontend test coverage is narrow.** A vitest harness now covers
-  `readSelectionRange` and the Glance View's action controls (25 tests), which
+  `readSelectionRange` and the Glance View's action controls (67 tests), which
   are the pieces that fail silently. `EntryCard`, `Comments`, `Timeline`,
   `VersionHistory`, `VoiceCapture` and `PatientHome` have no component tests,
   and nothing exercises the real `fetch` path — `Api` is mocked. There is no

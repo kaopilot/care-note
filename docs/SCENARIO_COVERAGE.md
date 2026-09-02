@@ -9,7 +9,7 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 843 backend
+pytest tests/ -q          # 957 backend
 cd frontend && npm test   # 61 component
 ```
 
@@ -40,7 +40,7 @@ cd frontend && npm test   # 61 component
 
 Scenario 3 moved **back**, from SURVIVES to PARTIAL, after a self-audit found a
 patient's phone number travelling in a query string and therefore into the
-access log (D-089). It was fixed and the convention is now a tested invariant,
+access log (D-083). It was fixed and the convention is now a tested invariant,
 but the log is still unrotated and unscrubbed, and the earlier SURVIVES was an
 overclaim: it had been assessed against the crash path only. Downgrading it is
 the honest read.
@@ -95,7 +95,7 @@ because the tests used the minimal shape of the case.**
    outage label lived only in `ai_model_used`, rendered as a 10px grey
    monospace string in the provenance footer. The data was right and the card
    read like an ordinary AI summary.
-3. **A phone number in a query string** (D-089). The enrolment route built for
+3. **A phone number in a query string** (D-083). The enrolment route built for
    scenario 1 put the patient's phone number in the URL, and the access log
    records the full request line before the application sees it. Scenario 1's
    answer leaking through scenario 3's door.
