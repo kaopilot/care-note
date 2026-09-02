@@ -1,370 +1,256 @@
-# Demo Script
+# Demo Script — round two
 
-Three scenarios, **7–8 minutes total**. Narrate what is on screen and why it
-matters, then move on — this is scored on clarity, not length. Every claim in
-the narration below is something visible on screen at that moment; if a number
-does not match what you see, read what you see.
+**Nine segments, ~9 minutes.** The brief asks to demonstrate as many of
+scenarios 1–16 as possible, so this script is organised by scenario, not by
+product tour. Every claim below is visible on screen at the moment it is said;
+if a number differs from what you see, read what you see.
 
-## Setup (do this before recording)
+Two segments deliberately show the build **failing** — scenario 2's blast radius
+and scenario 7's boundary. Do not cut them for time. "DOES NOT, and here is
+exactly why" is the answer the brief says it rewards, and a nine-minute video of
+green ticks makes every other claim in it worth less.
+
+## Setup (before recording)
 
 ```bash
 cd backend && python init_db.py --reset && uvicorn app.main:app   # :8000
 cd frontend && npm run dev                                        # :5173
 ```
 
-Two browser windows side by side, both at `localhost:5173`: **left signed in as
-`clinician_a`, right as `staff_a`** (password `carenote-demo` for every account).
-A third tab signed in as `patient_a` for the closing shot. Patient **Amira
-Rahman** is the chart used throughout.
+Two browser windows side by side at `localhost:5173` — **left `clinician_a`,
+right `staff_a`**, password `carenote-demo`. A terminal visible in a third pane;
+several segments run a command rather than clicking, because some of these
+claims are only checkable from a terminal.
 
-**One thing to know about the seed:** a fresh `--reset` contains a single
-AI-scribed note and it scores 0.82, which is high confidence, so the **"AI needs
-checking"** panel starts empty. Scenario A runs the scribe live to produce a
-low-confidence one, which is the better demo anyway. If you would rather not run
-it on camera, click **Patient session** under *Capture a consult* once before
-recording and the flag will already be there.
-
-Have `docs/TECHNICAL_BRIEF.md` open in a tab for the architecture diagram if you
-want to cut to it during Scenario C.
+Patient **Amira Rahman** throughout. On a fresh `--reset` her card leads with a
+penicillin allergy highlight marked **⚠ Always shown** — segment 6 depends on
+that, so confirm it is there before you start.
 
 ---
 
-## Scenario A — Glance View + AI scribe integration (~2.5 min)
-
-**Say:** *"A clinician opens a chart between consults. The question they walk in
-with is 'what do I need to know in the next ten seconds' — not 'show me
-everything'."*
-
-1. From the patient list, click **Amira Rahman**. Let the Top Card land. Do not
-   scroll — the point is what is readable without scrolling.
-2. Walk the four zones in order, briefly: **New since your last visit** → **What
-   matters now** (ranked, each with a reason) → **Risk flags** and **AI needs
-   checking** → **Open actions**.
-3. Point at the header timing and **read the two numbers off the screen** —
-   they vary run to run, so do not quote a figure from memory.
-   **Say:** *"Two numbers, deliberately. The first is what the application
-   controls, measured by middleware; the second is the full browser round trip.
-   The benchmark over 200 iterations puts the P95 in the low teens of
-   milliseconds against a 300ms budget."*
-4. **Run the scribe live.** Under *Capture a consult*, click **Patient session**.
-   **Say:** *"A synthetic transcript, redacted, then summarised. The processing
-   state is real — this is the pipeline, not a fixture."*
-   When it lands, point at the new entry's confidence chip and at **"AI needs
-   checking"**.
-   **Say:** *"Confidence is measured from hedging in the source transcript, not
-   reported by the model. This is a patient session full of 'maybe' and 'I
-   think', so it comes out around 0.47 — low. The nurse consult, mostly
-   measurements, comes out around 0.77. The chip shows the word and the number,
-   because 'medium' on its own means whatever the reader assumes it means."*
-5. **The provenance click.** Find a highlight tagged **◇ From AI note**. Say
-   *"this is a claim, not a fact — so it has to be checkable in one click."*
-   Click the span text.
-6. Land in the timeline. Point out that the highlighted characters are marked —
-   *"not 'jumps to the note', jumps to the words."* Point at the entry's dashed
-   rail and monospace body: *"AI-authored, and it's carried by four independent
-   signals so it survives in greyscale."*
-7. If a **"Risk set by rule"** chip is visible on an entry, point at it.
-   **Say:** *"Deterministic rules set a floor under the risk level. A model can
-   raise it — it might notice something our keyword list misses — but it can
-   never lower it, and this chip says which one decided. Model-assigned severity
-   labels drift between runs; a rule does not."*
-
-**Do not** click Confirm/Dismiss yet — that is Scenario B's payoff.
-
----
-
-## Scenario B — Collaboration, audit trail, contradictions (~3.5 min)
-
-**Say:** *"Now two roles working the same chart, and what the record remembers
-about it."*
-
-1. **(Right window, staff_a)** Add a staff note. Type something clinical with an
-   angle bracket in it, e.g. `Home readings averaging BP <135/85 this fortnight.`
-   Add to record.
-   **Say:** *"Stored exactly as written. We deliberately don't HTML-escape on
-   write — clinical prose contains `BP <120/80` and `dose <5mg`, and
-   tag-stripping can silently eat a dose limit. Corrupting a note is worse than
-   the XSS it would prevent, because untrusted content is never rendered as HTML
-   at all."*
-2. Open **Discussion** on that note, post a comment with `@clinician_a` in it,
-   and assign a task to the clinician.
-3. **(Left window, clinician_a)** Reload. The new note and the mention appear.
-   Show the task in **Open actions**.
-4. **Manual highlight inside an AI note.** Scroll to the AI-scribed consult
-   summary, select a phrase with the mouse, and confirm the highlight.
-   **Say:** *"That's the learning signal. The system records which kinds of
-   content a clinician reaches for and weights similar content up in future —
-   bounded, so it can never exceed a quarter of the score, and floored, so no
-   amount of dismissing can teach it to stop mentioning an allergy."*
-5. Click **Confirm** on a suggested highlight in the Top Card.
-   **Say:** *"One click, inline, no navigation away. That is a design
-   constraint rather than a nicety — this decision is also the training signal,
-   and a control with friction on it produces a sparse one."*
-6. **Edit and revert.** Edit the clinician section (change the plan text). Open
-   **History** → show the version diff → **Revert** to the prior version.
-   **Say:** *"Revert appends a new version rather than rolling the number back.
-   History is never destroyed — you can always see that a revert happened."*
-7. Briefly show the **audit trail**: who changed what and when, metadata only.
-   *"The log carries IDs, actions and timestamps. Never note bodies, never
-   transcript text."*
-8. **Two people contradicting each other.** This is the sharpest thing to show,
-   so leave time for it.
-   **(Right window, staff_a)** add a staff note:
-   `Patient reports allergic to penicillin, rash on forearms.`
-   **(Left window, clinician_a)** add to the clinician section:
-   `Chest infection. Started on amoxicillin 500mg TDS for seven days.`
-   Reload the clinician window. A **critical band appears above everything else
-   on the card**, quoting both notes.
-   **Say:** *"Neither of them is being careless. The nurse recorded an allergy,
-   the clinician prescribed from a different part of a fragmented record, and
-   under the old way of working nobody sees both. Penicillin and amoxicillin are
-   not the same word — they are the same drug class, which is what the detection
-   is actually matching on."*
-   Then the important half: *"Notice what the system does not do. It does not
-   pick a winner. There is no precedence rule between two clinicians, and
-   deciding the more recent note wins would throw away an allergy recorded last
-   year. Both entries are quoted, both are one click away, and a person
-   decides."*
-   If asked how it avoids crying wolf: no model is involved, it is deterministic
-   pattern matching over three classes — allergies, doses, medication status —
-   `1g` and `1000mg` are not treated as a conflict, and *"denies allergy to
-   aspirin"* does not register as an allergy.
-
----
-
-## Scenario C — Longitudinal context, learning, decay (~2.5 min)
-
-1. Scroll the timeline to the **older entries** — the 2025 and early-2026 dates
-   are seeded specifically for this.
-   **Say:** *"Date-grouped, not a flat feed, because a six-month gap should not
-   look like a six-minute one."*
-2. **Say how ranking prioritises:** *"Recent, unresolved, and clinician-confirmed
-   beat old and settled. Every highlight shows its own arithmetic — recency,
-   risk level, clinical entities, unresolved actions, and the learned term."*
-   Point at a visible score breakdown showing **"Learned from this clinic"**.
-3. Expand **"What this clinic pays attention to"** in the Glance View sidebar.
-   **Say:** *"The learned weights, inspectable. Thirteen seeded interactions
-   representing six months of real clinical attention — and they're seeded as
-   *behaviour*, then aggregated through the same code path a live click uses.
-   Seeding the weights directly would have been shorter and would have been a
-   lie."*
-4. **Code-switched capture.** Scroll to the patient note titled **"Kaki saya"**
-   — "Kaki bengkak again this week... Kebas sikit waktu pagi."
-   **Say:** *"This is what a patient in a Singapore or Malaysian clinic actually
-   writes — two languages in one sentence. For most of this build that entry
-   produced no clinical tags at all, so it scored nothing and never reached the
-   Top Card, even though it describes exactly the oedema the consult is about.
-   The patients least likely to be understood in English were the ones the
-   system quietly stopped surfacing."*
-   Point at its highlight in the Top Card: reason reads **"Oedema (Malay:
-   bengkak)"**.
-   **Say:** *"`bengkak` emits the same tag `swelling` emits — not a separate
-   one. That matters for the learning layer: one concept has to be one feature,
-   or a clinic's learned attention wouldn't transfer across whichever language
-   the patient happened to use. And nothing is translated — the record still
-   shows exactly what she wrote."*
-   If asked what's missing: only Malay, only fourteen terms, needs a
-   native-speaker review, and negation is unhandled in both languages.
-5. **Data decay.** Point at the compressed 2026 history entry.
-   **Say:** *"Hot, warm, cold. Older low-priority entries compress to an
-   extractive summary with the original archived — byte-exact reversible, and
-   provenance still resolves through to the archive, so a pointer into a
-   compressed entry doesn't dangle. The 2025 entry next to it was held back
-   because it documents an allergy: protection rules beat age."*
-6. **(Patient tab)** Switch to `patient_a`.
-   **Say:** *"Same record, different register. Plain language, no scores, no
-   clinical shorthand, no internal comments and no raw AI notes — and that's
-   enforced server-side, not by hiding things in this page."*
-7. **Close on the argument:** *"The hard part here is not summarising a
-   consult. It is building something clinical staff should trust exactly as far
-   as it deserves, and no further. Our answer is that AI output enters this
-   system as a claim rather than a fact. Nothing AI-generated counts until a
-   clinician accepts it. Every claim opens to its source in one click. When a
-   clinician disagrees with the AI the clinician wins, but the disagreement
-   stays on the record instead of being quietly deleted. When two people
-   disagree, the system surfaces it and refuses to choose. And nothing the AI
-   writes can ever reach the patient — not because we review it, but because
-   there is no code path that would let it."*
-
----
-
-## Worth mentioning if there is time
-
-- **What is stubbed:** the speech recogniser is a simulated stub — it does not
-  transcribe, and it says so on every surface it touches. Being straight about
-  this is worth more than implying a capability the build does not have.
-- **The defects the tests missed, and why they all look alike:** superseded
-  highlights were never deleted, so the Top Card rendered every claim twice —
-  live through 334 passing tests, found by looking at the screen (D-055). Five
-  more surfaced afterwards from using the thing (D-059–D-062): a clinician's own
-  highlight vanished from the card, confirming one suggestion 404'd the rest,
-  "new since your last visit" stayed empty for a whole session, a task could
-  never be closed, and every timestamp shipped without a UTC offset so a note
-  written seconds ago read "8h ago" in SGT. Each lives in the seam between two
-  pieces of individually correct code, which is the class a component-level
-  suite cannot see — so the regressions are end-to-end sequences, and ten of
-  fifteen fail against the previous commit. Say this plainly if asked what you
-  would fix next; a candidate who can name the shape of their own blind spot is
-  worth more than one with nothing to report.
-- **The three numbers, if they ask about evaluation:** the risk badge has a
-  deterministic floor a model can raise but never lower, and the row records
-  which one set it. Confidence is measured from hedging in the source on every
-  path, banded high ≥0.75 / medium 0.60–0.75 / low <0.60 — a live model's
-  self-report is stored for calibration and never shown, because a number the
-  model chose about itself cannot be checked by the person reading it. The
-  importance score shows its own arithmetic term by term. Each abstains: an
-  unparseable risk falls back to `low` with the floor still applied, confidence
-  never claims 1.0, and a span with no clinical reason produces no highlight at
-  all.
-
-## Do not
-
-- Read the security table aloud. Say it is in the brief and move on.
-- Demo cross-clinic refusal in the UI — it is an API property. If asked, run
-  `python scripts/phase1_smoke.py`.
-- Apologise for the stub recogniser more than once.
-
----
-
-# Round two — the clinic scenarios (~5 min)
-
-Record this as a **second segment** after the three original scenarios rather
-than reworking them. The reviewers asked to see as many of 1–16 as possible, and
-these five sequences cover eleven of them without repeating what Scenarios A–C
-already show.
-
-Keep the same discipline: say the verdict, show the thing, move on. Where a
-scenario does **not** survive, say so on camera — that is the answer they asked
-for, and claiming otherwise is the only thing that counts against us.
-
-## R1 — The provider is down (scenarios 9, 8) · ~60s
+## 1 — The table, honestly (~45s) · framing
 
 ```bash
-# stop the server, restart with the outage flag on
+pytest tests/test_survival_scenarios.py -v
+```
+
+> "Sixteen scenarios, one test each. Nine survive, six are partial, one does
+> not. Two of these moved *backwards* after we audited ourselves — clinic
+> isolation and log hygiene were both SURVIVES until we measured them properly.
+> This file fails if its verdicts drift from the published table, so the
+> document and the tests cannot disagree."
+
+Do not read the table aloud. Let it scroll and move on.
+
+---
+
+## 2 — She has no email (scenarios 1, 5) · ~75s
+
+Right window, as `staff_a`: **Add patient** → name only, identifier type
+**phone**, `0198887777` → **Issue login**.
+
+> "She exists for the clinic as a phone number in a WhatsApp thread. Phone is a
+> first-class identifier, not a workaround — and `dob` and `mrn` had to become
+> nullable, because those `NOT NULL` columns were a second, quieter way the
+> schema decided she was not a patient."
+
+Log in as her in a private window to show the passcode works.
+
+Then, terminal:
+
+```bash
+pytest tests/test_clinic_config.py -v
+```
+
+> "Scenario 5 asks config versus schema. Schema: nothing — every table already
+> carries `clinic_id`, so a third clinic needs no migration. Config was the real
+> gap, and the useful half was deciding what stays global. Redaction, the
+> protected clinical classes, contradiction severities — a clinic can change
+> what it sees, never what it is protected from. Vocabulary is still global, so
+> this one stays partial."
+
+---
+
+## 3 — Assume that line has a bug (scenario 2) · ~60s · **shows a failure**
+
+Left window as `clinician_a`, paste Clinic B's patient id into the URL → 404.
+
+> "Isolation is enforced in one place: `AccessScope.query`. Routes never get a
+> user, they get a scope that has already narrowed to their clinic, so
+> forgetting the check is not a mistake you can make."
+
+Terminal:
+
+```bash
+pytest tests/test_survival_scenarios.py::test_breaking_the_single_line_exposes_every_clinic -v
+```
+
+> "The scenario asks what happens when that line has a bug. So we drop the
+> clinic filter and ask again — and every patient in both clinics comes back.
+> Nothing else catches it. No row-level security, no per-tenant connection, no
+> check at the serialisation boundary. It is the strongest single control we
+> have and it is *singular*, which is a different property. That is why this one
+> is partial, not survives."
+
+---
+
+## 4 — The doors nobody guards (scenarios 3, 4) · ~75s
+
+```bash
+pytest tests/test_llm_chokepoint.py tests/test_url_surface.py -q
+```
+
+> "Scenario 4 asks us to prove redaction runs before the model. It is not a
+> code comment — a test scans the source and fails if any module but the wrapper
+> can reach a provider."
+
+> "Scenario 3 asks about the other doors. Two were open. Crash logs: SQLAlchemy
+> puts bound parameters in exception messages, so one unhandled error put a
+> name, an NRIC and note content in a single line. Then the one we found
+> auditing ourselves — the access log records the full request line before our
+> code runs, and our *own* enrolment route was passing the patient's phone
+> number as a query parameter. The feature built for scenario 1, leaking through
+> scenario 3. It is in the body now, and a test pins that no route can take
+> patient data in a URL again."
+
+---
+
+## 5 — The model hangs, then dies (scenarios 8, 9) · ~75s
+
+Restart the API with the outage flag:
+
+```bash
 CARENOTE_LLM_FORCE_UNAVAILABLE=true uvicorn app.main:app
 ```
 
-Click **Doctor consult** under *Capture a consult*.
+Left window → **Capture a consult** → **Doctor consult**.
 
-> "The model provider is returning errors. The clinician still gets a summary —
-> it is rule-derived, and the card says so: `offline-extractive-v1:provider-unavailable`.
-> The degradation is visible rather than silent, which matters more than the
-> degradation being invisible."
+> "Provider returns 503 for an hour. The clinician still gets a summary — rule
+> extracted from the transcript, every sentence the speakers' own — and the card
+> says **written without the AI**."
 
-Point at the **Cancel** button on the processing card while it runs.
+Point at the chip.
 
-> "The server timeout is eight seconds, down from sixty. Sixty is a batch-job
-> timeout; a clinician is standing next to a patient. Cancelling is safe because
-> the transcript is written before the model is called — you lose the summary,
-> never the consult."
+> "That badge is the fix from our own audit. The label existed before, but only
+> as a model string in ten-pixel grey next to the pointer. The data was right
+> and the card read like an ordinary AI summary. It is also deliberately
+> separate from the confidence chip: 'the model was unsure' and 'no model read
+> this consult' need different responses."
 
-**Say the gap:** aborting the browser request does not cancel the server-side
-call. Bounded, not free.
+> "The timeout is 8 seconds, not 60. A 45-second hang is not a timeout a
+> clinician standing next to a patient can use."
 
-## R2 — Read the logs (scenario 3) · ~45s
+Restart without the flag before continuing.
 
-Show the terminal running the server, then in another tab hit a route that fails.
+---
 
-> "This was our worst finding and it had no clinician-visible symptom at all.
-> SQLAlchemy puts bound parameters in its exception messages, so one unhandled
-> 500 wrote a patient name, an NRIC and note content into a single log line.
-> Now: exception type, route, and a reference id. Nothing else."
+## 6 — A tired Tuesday (scenario 15) · ~75s
 
-Show the response body carrying the same reference.
+Left window, Amira's card. The penicillin highlight is top, chipped **⚠ Always
+shown**.
 
-> "The clinician quotes the reference, an engineer finds the request, and the log
-> never held a patient. Three tests fail if that middleware is removed."
+> "Scenario 15 asks what stops the ranking learning to bury an allergy because a
+> tired clinician swiped one away."
 
-## R3 — Allergy asserted and denied (scenarios 13, 6, 14) · ~90s
+Click **reject** on it. It drops to the bottom of the card and re-renders as
+**Dismissed — kept visible**.
 
-On Amira's chart, point at **Unreconciled contradictions** at the top of the card.
+> "It doesn't leave. Our first answer was a floor on the learned weight, and
+> that floors the wrong quantity — surfacing is a top-six cut, so other tags
+> rising displaces an allergy with its own weight untouched, and one dismissal
+> removed it permanently. Now protected classes bypass ranking entirely.
+> Learning still orders them; it cannot decide whether they appear."
 
-> "A nurse recorded a penicillin allergy. The patient told the AI she has no
-> known allergies. Both are in the timeline. Before this round the system found
-> **zero** contradictions here — the guard that stops 'denies allergy to aspirin'
-> becoming a false alarm was also throwing away the patient's denial."
+> "And the protected list *is* the never-dampened list, imported — not a second
+> list that would drift silently."
 
-Click through to both source entries.
+---
 
-> "It fires at high, not critical. Nothing dangerous has happened yet — the safe
-> action is already the one being taken. Critical is reserved for *about to be
-> given a drug they react to*, and diluting it would break the level that
-> matters. The system reports and does not resolve: there is no precedence rule
-> between a nurse's note and a patient's own account."
+## 7 — The record disagrees with itself (scenarios 13, 6, 14) · ~90s
 
-Then scroll to an AI summary with the **unread-content** flag.
+Right window as `staff_a`, add a staff note: `Patient reports allergy to
+penicillin — rash as a child.` Left window as clinician, add: `Patient states she
+has no known drug allergies.` Reload the Glance View.
 
-> "Part of this consult was in Hokkien. We cannot read it, and rather than
-> producing nothing and looking confident, the card says so. Separately, the risk
-> floor used to be English-only — Malay chest pain rated medium where English
-> rated high. It now works on canonical tags, so the floor speaks every language
-> the tagger does."
+> "The nurse recorded penicillin. The patient told the AI she has none. Both are
+> in the timeline, both are cited, and the system does not choose — there is no
+> precedence rule between two people and inventing one would be a clinical
+> decision we have no standing to make."
 
-## R4 — The dose gate and regeneration (capabilities, scenario 12) · ~90s
+Add the same allergy in two more notes, reload.
 
-As `clinician_a`, compose a **patient instruction**: `Take metformin 5000mg once daily.`
+> "Here is what our own audit caught. Detection is pairwise, so re-recording an
+> allergy at every visit used to produce a card per pair — and because the list
+> is capped, those copies filled it and pushed a real metformin dose
+> disagreement off the card entirely. One clinical disagreement is now one card,
+> and every entry behind it keeps its own link."
 
-> "This is going to a patient, and patient-facing content is a higher severity
-> class. Nothing was saved. It names the drug, the figure written and the
-> expected adult range, so a clinician can tell a typo from a decision in one
-> read."
+Point to the Malay entry (`Kebas sikit waktu pagi`).
 
-Point at the buttons.
+> "Scenario 6 — the risk floor works on canonical tags, not English strings, so
+> the same symptom rates the same in Malay. It was `high` in English and
+> `medium` in Malay until we fixed it. Hokkien we cannot read, and it is flagged
+> as unread rather than silently scored — abstention beats confident silence."
 
-> "Going back is the primary action; confirming is secondary. A dialog whose
-> obvious button says *proceed* is a speed bump, not a gate. And it says the
-> confirmation is recorded — knowing an override is attributable to you is most
-> of what makes someone stop and reread."
+---
 
-Correct it to `500mg` and save. Then open an **AI-scribed** entry and click
-**Regenerate summary**.
+## 8 — Provenance, and two people typing (scenarios 16, 10) · ~75s
 
-> "Regeneration reuses the entry, so accepted highlights, comments and tasks
-> survive. And if a clinician had edited this summary, it refuses outright —
-> merging would mean choosing which of their sentences to keep, and that is a
-> clinical judgement the system has no standing to make."
+Click a highlight → jumps to the exact span in the source entry.
 
-If time allows, edit the AI note first and click regenerate to show the refusal.
+Now edit that source note in the right window. Reload the left.
 
-## R5 — Reach, staleness, and enrolment (scenarios 11, 12, 16, 1) · ~90s
+> "Scenario 16: the highlight cites a note that has since changed. It does not
+> silently point at different text — that is the worst of the three options
+> because it looks fine. Highlights anchor to a version number, so it resolves
+> against the text it was made from and shows both side by side."
 
-Edit a patient instruction the patient has already read. Return to the Glance
-View and point at **Not yet reached the patient**.
+Both windows, same note, same section, type in both, save left then right.
 
-> "Corrected, not seen. She read the earlier version and is possibly acting on
-> it. There is no sender in this build — no email, no SMS — so `dispatched` is
-> deliberately not a state we model. A build that cannot send is a limitation. A
-> build that cannot tell you it did not send is a false assurance."
+> "Scenario 10. The second save is rejected with a 409, not silently merged and
+> not silently lost — the version they edited is no longer current. No lost
+> updates. But this is not real-time: they find out at save, not at 09:14. No
+> presence, no cursors."
 
-Switch to the `patient_a` tab and reload.
+---
 
-> "Above everything else, in plain language: this was updated after you last read
-> it, stop and read this one. And it is computed before the read marker moves, or
-> it would vanish on the page load meant to show it."
+## 9 — What reaches the patient (scenarios 12, 11) · ~60s
 
-Back on the clinician view, find a stale highlight.
+Attempt a patient-facing note containing `metformin 5000mg`.
 
-> "The source note changed after this was highlighted — v2 to v5. Left is what
-> the clinician actually confirmed; right is what now sits at those coordinates.
-> Showing only the right-hand side would be a quiet lie about what was confirmed."
+> "Patient-facing content is a higher severity class — you cannot audit
+> something already on someone's phone. An implausible dose gates the write, and
+> the override is recorded rather than blocked outright, because a hard block
+> teaches people to route around the check."
 
-Close on enrolment.
+Patient tab → correction banner.
 
-> "And the patient who is only a phone number in a WhatsApp thread: staff can
-> register her and issue a login here. There is no email field anywhere in this
-> schema. What was missing was not the identity model — it was that only a
-> developer running a script could create the row."
+> "Scenario 11 asks why the link never arrives. Ours never sends — there is no
+> email, SMS or push, and `dispatched` is deliberately not modelled rather than
+> faked. We report reach honestly: unread, read, corrected."
 
-## Closing line
+---
 
-> "Sixteen scenarios: eleven survive, four partial, one does not. Streaming
-> capture does not — an allergy at minute two is known when the consult ends, and
-> the test asserts that boundary rather than papering over it. The fix is
-> tractable; the part we could not resolve is when it is acceptable to interrupt
-> a doctor mid-sentence, and that wants a clinician rather than an engineer."
+## Closing (~30s)
 
-## Do not, in this segment
+> "Scenario 7 we do not survive, and it is worth saying plainly. The scribe is
+> post-hoc — it consumes a whole transcript — so a drug allergy at minute two is
+> not in the Glance View until the consult ends. The deterministic extractors
+> are pure functions and would run on partial transcript in about ten seconds;
+> what we could not answer is when it is acceptable to interrupt a doctor
+> mid-sentence, and that needs a clinician, not an engineer."
 
-- Do not claim streaming, diarization or a real drug database. None exist.
-- Do not skip the gaps. The verdict spread is the point.
-- Do not run over. Five minutes; the first segment already carries the product.
+> "Nine survive, six partial, one does not. Two moved backwards because we
+> measured our own claims instead of restating them. The full table, with the
+> test behind every row, is in `SCENARIO_COVERAGE.md`."
+
+---
+
+## Do not
+
+- Do not claim real-time collaboration, streaming ASR, acoustic diarization, a
+  message sender, or a real drug database. None exist.
+- Do not skip segment 3 or the closing. The failures are the argument.
+- Do not read verdict tables aloud — show them scrolling and narrate the point.
+- Do not say "secure" or "HIPAA-compliant". Synthetic data, prototype, and the
+  README says plainly it is not safe for real PHI as-is.
