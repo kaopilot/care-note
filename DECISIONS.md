@@ -2778,12 +2778,21 @@ Four numbers, measured against the seeded chart (`scripts/eval_learning.py`):
 
 | | clinic-a | reading |
 |---|---|---|
-| `displacement_rate` | 0.29 | 2 of 7 visible slots changed. Learning is doing something, and is not doing the ranking |
-| `exposure_concentration` | 0.71 | **the bias, as a number** — 5 of 7 visible slots go to tags this clinic has already given feedback on |
-| `blind_tag_rate` | 0.31 | 8 of 26 tags in the record have never reached the card, so the loop has never had a chance to learn they matter |
+| `displacement_rate` | 0.15 | 2 of 13 visible slots changed. Learning is doing something, and is not doing the ranking |
+| `exposure_concentration` | 0.77 | **the bias, as a number** — 10 of 13 visible slots go to tags this clinic has already given feedback on |
+| `blind_tag_rate` | 0.16 | 5 of 31 tags in the record have never reached the card, so the loop has never had a chance to learn they matter |
 | `protected_tags_displaced` | `[]` | no protected class lost a slot to a promoted one |
 
-**0.71 is the finding.** It is not a pass mark, and we are not claiming it is a
+**These figures went stale within a day, which is the mechanism working.**
+They were first measured at displacement 0.29 / exposure 0.71 / blind 0.31.
+Seeding `patient-a2` with a contradiction chart (D-094) added entries,
+highlights and tags, and every number moved. That is what a measurement is
+supposed to do and it is also a warning: **a number quoted in a document is a
+snapshot, and the script is the source of truth.** Run
+`python scripts/eval_learning.py` rather than trusting the table above — if the
+two disagree, the table is what is wrong.
+
+**0.77 is the finding.** It is not a pass mark, and we are not claiming it is a
 good number — we have nothing to compare it against. What it does is convert an
 argument into a measurement that moves when the system changes, which is the
 difference the capability list is asking about.

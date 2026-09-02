@@ -1257,8 +1257,10 @@ already given feedback on — this is exposure bias stated as a number),
 `protected_tags_displaced` (should always be empty; a non-empty list exits
 non-zero, because it is a defect rather than a measurement).
 
-Measured on the seeded chart: displacement 0.29, exposure concentration 0.71,
-blind-tag rate 0.31, no protected classes displaced. See `DECISIONS.md` D-092
+Measured on the seeded chart: displacement 0.15, exposure concentration **0.77**,
+blind-tag rate 0.16, no protected classes displaced — but run the script rather
+than trusting those figures. They moved once already when the seed data grew
+(D-094), which is the measurement working. See `DECISIONS.md` D-092
 for what these do and do not prove — in particular, this is a re-ranking
 counterfactual, not off-policy evaluation, and it cannot measure what the rules
 never surfaced in the first place.

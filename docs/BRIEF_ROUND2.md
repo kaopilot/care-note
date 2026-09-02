@@ -66,7 +66,7 @@ missing — which is exactly scenario 1.
 | 12 | Summary wrong by one dosage | PARTIAL | **SURVIVES** — correction banner and a dose gate |
 | 13 | Allergy asserted vs denied | PARTIAL | **SURVIVES** — `assertion_vs_denial` at HIGH, one card per disagreement |
 | 14 | A number that means nothing | SURVIVES | **SURVIVES** — floor now language-independent |
-| 15 | Ranking learns from what it showed | SURVIVES | **PARTIAL** — floors, exploration and inspectability hold; bias now *measured* at 0.71 rather than argued (D-092) |
+| 15 | Ranking learns from what it showed | SURVIVES | **PARTIAL** — floors, exploration and inspectability hold; bias now *measured* at 0.77 rather than argued (D-092) |
 | 16 | Highlight cites edited source | SURVIVES | **SURVIVES** — now side by side, both versions named |
 
 On the twelve capabilities: **4 SURVIVES · 7 PARTIAL · 1 DOES NOT**, revised
@@ -421,9 +421,9 @@ not. **A documented gap that a second mechanism is silently failing to cover is
 worse than an undocumented one, because the documentation reads like a control.**
 
 **Exposure bias had a mitigation and no measurement (D-092).** Now measured:
-displacement 0.29, exposure concentration **0.71**, blind-tag rate 0.31, zero
-protected classes displaced. The 0.71 is the bias stated as a number — five of
-seven visible slots go to tags this clinic has already given feedback on. We are
+displacement 0.15, exposure concentration **0.77**, blind-tag rate 0.16, zero
+protected classes displaced. The 0.77 is the bias stated as a number — ten of
+thirteen visible slots go to tags this clinic has already given feedback on. We are
 not claiming that is a good number; we have nothing to compare it to. We are
 claiming it is a number that moves when the system changes, which is what the
 capability asks for and what an argument cannot do.
