@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ErrorBoundary from './components/ErrorBoundary'
 import { Api, ApiError } from './lib/api'
 import DosageConfirm from './components/DosageConfirm'
 import GlanceView from './components/GlanceView'
@@ -399,6 +400,19 @@ function Workspace({ session, onSignOut }) {
 export default function App() {
   const [session, setSession] = useState(null)
   const [checking, setChecking] = useState(true)
+  // Set when the server stops accepting our cookie. Sessions last 60 minutes
+  // and there is deliberately no refresh flow (D-016), so this fires on a real
+  // clinic laptop most afternoons — it needs a real answer, not a red line.
+  const [expired, setExpired] = useState(false)
+
+  useEffect(() => {
+    // A 401 from any request means the session ended, wherever it happened.
+    // Handling it centrally beats each caller rendering its own dead end.
+    return Api.onUnauthorized(() => {
+      setSession(null)
+      setExpired(true)
+    })
+  }, [])
 
   useEffect(() => {
     // Restore an existing session from the httpOnly cookie. Nothing is read
@@ -411,6 +425,7 @@ export default function App() {
 
   async function signOut() {
     await Api.logout().catch(() => {})
+    setExpired(false)
     setSession(null)
   }
 
@@ -418,14 +433,30 @@ export default function App() {
     return <p className="p-8 text-sm text-slate-500">Checking session…</p>
   }
   return session ? (
-    <Workspace session={session} onSignOut={signOut} />
+    <ErrorBoundary>
+      <Workspace session={session} onSignOut={signOut} />
+    </ErrorBoundary>
   ) : (
     <div className="px-4">
       <h1 className="mt-10 text-center text-xl font-semibold tracking-tight">Care Note</h1>
       <p className="mt-1 text-center text-sm text-slate-600">
         Shared longitudinal patient record
       </p>
-      <LoginForm onLoggedIn={setSession} />
+      {/* Signed out by the clock, not by choice. Say which, say that saved
+          work survived, and put the sign-in directly underneath — a session
+          that ends without explanation reads as data loss. */}
+      {expired && (
+        <div className="mx-auto mt-4 max-w-sm rounded border border-amber-300 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-900">
+            Your session timed out
+          </p>
+          <p className="mt-1 text-sm text-amber-900">
+            Sessions end after 60 minutes. Anything you saved is in the record —
+            sign in again to carry on.
+          </p>
+        </div>
+      )}
+      <LoginForm onLoggedIn={(next) => { setExpired(false); setSession(next) }} />
     </div>
   )
 }

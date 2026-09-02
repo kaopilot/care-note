@@ -2508,3 +2508,50 @@ It is also the piece that needs the most care, because vocabulary additions must
 be additive only — a clinic that could *remove* a term could remove
 `entity:allergy`, which is the safety floor by another route. There is no admin
 UI or API for writing config either; rows are inserted directly today.
+
+### D-087 · A crash and a timeout are things the clinician is told, not left to infer
+
+Two failures that reach a user mid-consult, neither of which anything tested or
+handled, both found in a last pass over ease-of-use and leakage.
+
+**A render crash white-screened the whole app.** There was no error boundary
+anywhere, so React unmounted the entire tree if any component threw. A clinician
+with a patient in the room got a blank page — and in a clinical record a blank
+page is indistinguishable from data loss. That is the worst failure mode this
+product has, because the recovery a clinician will reach for is to retype the
+note they think they lost.
+
+The boundary says the thing that actually matters first: **nothing you saved has
+been lost.** Writes commit server-side before the response returns, so a render
+crash cannot have discarded a saved note, and saying so plainly is both true and
+the reassurance the moment calls for. A reload button and an eight-character
+reference follow, matching the backend's crash convention (D-071).
+
+**It renders no error text, deliberately.** `error.message` can hold anything
+the throwing code interpolated into it, up to and including entry content. So it
+is never shown and never logged; our handler emits a type name and a reference.
+Putting a stack trace on the screen of a shared consult-room laptop is a PHI
+leak that happens in front of the patient.
+
+**Known gap, asserted rather than assumed.** React itself re-logs caught errors
+to `console.error` in development builds, message included, and we cannot
+suppress that from inside a boundary. `Resilience.test.jsx` contains a test that
+*asserts the leak happens*, so it is visible in the suite rather than only here,
+and it will fail if React changes the behaviour. The mitigations are shipping
+production builds and never interpolating record content into an error message.
+A deployment forwarding the browser console to a third-party dashboard inherits
+this.
+
+**A session timeout stranded the user.** Sessions last 60 minutes with no
+refresh flow (D-016) — a deliberate security decision, and one that fires on a
+real clinic laptop most afternoons. The 401 surfaced as a red line reading
+"Token expired" next to a chart that had silently stopped working, with no way
+to act on it. A security control that strands people is a control people route
+around.
+
+401 is now handled centrally in the API wrapper, which announces it once rather
+than letting each caller render its own dead end. The sign-in screen returns
+with an explanation, states that saved work survived, and puts the form directly
+underneath. The session-restore probe (`me()`) is exempted via `silent401`,
+because it 401s for anyone who has simply never signed in and a first-time
+visitor should not be told their session timed out.

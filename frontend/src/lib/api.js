@@ -41,6 +41,18 @@ async function request(path, options = {}) {
   const serverMs = Number(response.headers.get('X-Response-Time-Ms') || 0)
 
   if (!response.ok) {
+    // A 401 means the session ended — the cookie expired, or was cleared.
+    // Sessions last 60 minutes with no refresh flow (D-016), so this is a
+    // routine afternoon event, not an exception. Announce it once, centrally,
+    // rather than letting every caller render its own dead end: the failure
+    // the clinician sees otherwise is a red line next to a chart that has
+    // silently stopped working.
+    //
+    // `silent401` exempts the session-restore probe. `me()` runs on every page
+    // load and 401s for anyone who has simply never signed in; without this,
+    // a first-time visitor would be told their session had timed out.
+    if (response.status === 401 && !options.silent401) notifyUnauthorized()
+
     const body = await response.json().catch(() => ({}))
     const detail = body.detail
     const message =
@@ -51,6 +63,29 @@ async function request(path, options = {}) {
   }
   const data = response.status === 204 ? null : await response.json()
   return { data, clientMs, serverMs }
+}
+
+// --- session-expiry notification -----------------------------------------
+//
+// A tiny listener set rather than a framework: one subscriber (App) today, and
+// the alternative is threading a callback through every component that happens
+// to make a request.
+
+const unauthorizedListeners = new Set()
+
+export function onUnauthorized(handler) {
+  unauthorizedListeners.add(handler)
+  return () => unauthorizedListeners.delete(handler)
+}
+
+function notifyUnauthorized() {
+  for (const handler of unauthorizedListeners) {
+    try {
+      handler()
+    } catch {
+      // A broken listener must not turn a session timeout into a crash.
+    }
+  }
 }
 
 export async function api(path, options) {
@@ -65,7 +100,8 @@ export async function apiTimed(path, options) {
 const body = (payload) => ({ method: 'POST', body: JSON.stringify(payload) })
 
 export const Api = {
-  me: () => api('/auth/me'),
+  onUnauthorized,
+  me: () => api('/auth/me', { silent401: true }),
   login: (username, password) => api('/auth/login', body({ username, password })),
   logout: () => api('/auth/logout', { method: 'POST' }),
 
