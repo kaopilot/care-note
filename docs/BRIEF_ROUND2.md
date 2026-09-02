@@ -6,14 +6,19 @@ Architecture, schema and latency are unchanged and remain in
 Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
-**Where we landed: 10 SURVIVES · 5 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Fourteen decisions (D-070 to D-083), 137
-new tests, 572 backend and 49 component tests passing.
+**Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
+6 · 6 · 4 in our own first assessment. Sixteen decisions (D-070 to D-085), 149
+new tests, 584 backend and 49 component tests passing.
 
-One row moved backwards. Scenario 3 was SURVIVES and is now PARTIAL, because
-re-auditing our own answer found a patient's phone number travelling in a query
-string and therefore into the access log. Section 7 covers that and the two
-other defects the re-audit found inside rows we had already claimed.
+**Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
+PARTIAL: a patient's phone number was travelling in a query string and therefore
+into the access log. Scenario 2 was SURVIVES and is now PARTIAL: we had answered
+*where* clinic isolation is enforced and never measured what happens when that
+one line is wrong — the answer is every patient in both clinics, and nothing
+else catches it. Sections 7 and 8 cover both.
+
+`pytest tests/test_survival_scenarios.py -v` walks the sixteen scenarios one at
+a time, and fails if its verdicts drift from the table below.
 
 ## 1. What the review actually found
 
@@ -247,3 +252,50 @@ rows we would probe next are 12 and 15 — the dosage gate has only ever been
 exercised against drugs the 17-entry table knows, and the learning loop's
 `NEVER_DAMPENED` floors have never been tested against a clinic that dismisses
 at a realistic rate over months rather than in a simulated burst.
+
+## 8. The themes underneath the sixteen
+
+Read as eight themes rather than sixteen incidents, the scenarios sort our build
+into two piles, and the split is not where we expected.
+
+**Enforcement that is strong but singular (theme 2).** Access control is fused
+into a type and redaction into the only module that can reach a network. Both
+are impossible to forget. Neither is defended in depth: dropping the clinic
+predicate from `AccessScope.query` exposes every patient in both clinics and
+nothing catches it (D-085). We had been treating *unforgettable* as if it were
+*redundant*. It is a different property, and the scenario asks about the second.
+The database-level predicate check that would give real depth is scoped in
+D-085 and deliberately not attempted this close to the deadline.
+
+**Privacy outside the front door (theme 3).** Redaction-before-LLM is provable
+(`test_llm_chokepoint.py` — no module but the wrapper may reach a model). The
+windows were the problem: crash logs carrying SQLAlchemy bound parameters
+(D-071), then the access log carrying a phone number we put in a URL ourselves
+(D-083). Both were found *after* we had declared the door guarded. The pattern
+worth naming is that each leak was in a sink our own code does not write to.
+
+**Numbers that mean something (theme 6).** Risk has a deterministic floor a
+model cannot lower, and the floor is language-independent (D-072). Confidence is
+derived, not self-reported. Extraction and generation are separated in the code,
+not just the prose: highlights are character offsets into a pinned
+`source_version_number`, never model-paraphrased text, which is what makes
+scenario 16 answerable at all.
+
+**Feedback loops (theme 8).** This is where re-reading the themes changed the
+build most. `NEVER_DAMPENED` floors a protected tag's learned weight, and we had
+been citing it as the answer to "what stops the ranking burying an allergy."
+It floors the wrong quantity: surfacing is a top-N cut, so other tags rising
+displaces an allergy with its own weight untouched, and one dismissal removed it
+from the card permanently. Protected classes now bypass ranking entirely
+(D-084). Learning orders the protected set; it no longer decides membership.
+
+**Where we are still weak, plainly.** Degraded-mode behaviour (theme 4) is
+handled for the model and absent for delivery — there is no sender, so scenario
+11 cannot fully survive. Identity (theme 1) is fixed for scenario 1 and
+unfinished for scenario 5: per-clinic vocabulary, thresholds and red-flag terms
+are module constants, so onboarding Clinic B is a code change, not a config one.
+Concurrency (theme 5) loses no updates but is not real-time. And scenario 7
+remains DOES NOT: the scribe is post-hoc by construction, so a drug allergy at
+minute two is not in the Glance View until the consult ends. That is an
+architecture decision, stated rather than hedged, and `test_capture_timing.py`
+pins the boundary rather than papering over it.
