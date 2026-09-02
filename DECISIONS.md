@@ -3075,3 +3075,42 @@ else here is checked.
 D-081 is the right record to cite at that line. No test can. It checks that the
 target exists and is unique, which is the part that mechanises, and leaves the
 judgement where judgement belongs.
+
+### D-099 · The test count was quoting the wrong number
+
+`957 tests` was reported after the property-testing pass. It is technically the
+number pytest prints and it is not the number a reader should be given.
+
+851 cases collect from **528 distinct test functions**; 44 of those are
+parametrised. The worst offender was ours:
+`test_every_decision_reference_resolves` parametrised over every searched file
+and produced **111 cases for one assertion** — inflating the headline figure
+elevenfold and, worse, reporting one broken file per run. Three references were
+wrong when it was written, so a per-file split would have surfaced them across
+three separate runs.
+
+Collapsed to a single test that collects every dangling citation into one
+message. 114 cases became 4, the output got more useful, and the count stopped
+lying. Two large parametrisations remain and are kept deliberately —
+`test_no_route_takes_patient_data_in_the_url` (49) and the clinic-isolation
+matrix (42) both enumerate a real surface where knowing *which* route failed is
+the point.
+
+**The honest figures**, for anyone auditing rather than skimming:
+
+| | |
+|---|---|
+| distinct test functions | 528 |
+| collected cases | 851 |
+| test LOC vs backend app LOC | 11,555 vs 12,502 (0.92 : 1) |
+| full suite runtime | ~50s, offline, no API key |
+
+**Known overlap, not claimed as independent coverage.** Four of the thirteen
+functions in `test_redaction_properties.py` restate assertions that already
+exist in `test_redaction.py` — idempotence, clinical content survival, falsy
+input, and post-redaction cleanliness — with generated input instead of fixed
+examples. The generated versions strictly subsume the fixed ones. Both are kept
+because they fail differently: the example test names the intent and points at a
+line, the property test covers the space and shrinks to a minimal counterexample.
+That is a defensible reason to duplicate, and it is still duplication; a leaner
+suite could drop four functions and lose the clearer failure messages.

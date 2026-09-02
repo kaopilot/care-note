@@ -96,24 +96,36 @@ def test_decision_numbers_run_without_gaps():
     assert not missing, f"decision numbers missing from DECISIONS.md: {missing}"
 
 
-@pytest.mark.parametrize(
-    "path", _searchable_files(), ids=lambda p: str(p.relative_to(REPO_ROOT))
-)
-def test_every_decision_reference_resolves(path):
-    """No file may cite a decision that was never written."""
-    defined = set(_defined_numbers())
-    text = path.read_text(encoding="utf-8", errors="replace")
+def test_every_decision_reference_resolves():
+    """No file may cite a decision that was never written.
 
-    dangling = sorted(
-        {
-            f"D-{number}"
-            for number in DECISION_REFERENCE.findall(text)
-            if f"D-{number}" not in defined
-        }
-    )
-    assert not dangling, (
-        f"{path.relative_to(REPO_ROOT)} cites {dangling}, which "
-        "DECISIONS.md does not define."
+    Deliberately **one** test over every file rather than one test per file.
+    Parametrising by path was the first version: it produced 111 cases, which
+    inflated the suite's headline count elevenfold for a single assertion and,
+    worse, reported one broken file at a time. Three references were wrong when
+    this was written; a per-file split would have surfaced them across three
+    separate runs.
+
+    Collecting every failure into one message is both the smaller number and
+    the more useful output.
+    """
+    defined = set(_defined_numbers())
+    broken: dict[str, list[str]] = {}
+
+    for path in _searchable_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        dangling = sorted(
+            {
+                f"D-{number}"
+                for number in DECISION_REFERENCE.findall(text)
+                if f"D-{number}" not in defined
+            }
+        )
+        if dangling:
+            broken[str(path.relative_to(REPO_ROOT))] = dangling
+
+    assert not broken, "citations that DECISIONS.md does not define:\n" + "\n".join(
+        f"  {path}: {', '.join(refs)}" for path, refs in sorted(broken.items())
     )
 
 

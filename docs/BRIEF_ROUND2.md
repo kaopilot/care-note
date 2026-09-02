@@ -8,7 +8,8 @@ Per-scenario verdicts and their tests are in
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
 6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
-new tests, 957 backend and 67 component tests passing.
+new tests, 528 backend test functions (851 parametrised cases) and 67
+component tests passing.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
