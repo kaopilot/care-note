@@ -7,9 +7,14 @@ Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Nineteen decisions (D-070 to D-088), 173
-new tests, 528 backend test functions (851 parametrised cases) and 67
-component tests passing.
+6 · 6 · 4 in our own first assessment. Decisions D-070 to D-103, 542 backend
+test functions (866 parametrised cases) and 67 component tests passing.
+
+**Section 11 is a final pass, and it found four more defects.** All four were
+live while the suite was green. Two of them were misfiring on the two surfaces a
+patient can actually see. We have left the account of them at full length rather
+than folding them into a summary, because how they were found matters more than
+that they were fixed.
 
 **Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
 PARTIAL: a patient's phone number was travelling in a query string and therefore
@@ -504,3 +509,82 @@ digits at risk of becoming `[ID_1]` — trading a narrow privacy gap for a broad
 accuracy one, which is the wrong direction and exactly what the hint warned
 about. Pinned by a test that asserts current behaviour and fails the day anyone
 changes it.
+
+## 11. A final pass, and the four defects a green suite was hiding
+
+We ran the exercise one more time before submitting. Not by re-reading the code
+— we had done that twice — but by running the system on clinical text nobody had
+run it on: a three-drug reconciliation list, a patient editing her own note, a
+400-day-old entry going through decay. Four defects came out, and **all four
+were live while 847 backend and 67 frontend tests passed.** None of them would
+have been found by making the existing tests stricter.
+
+**The patient was warned that her own note had been corrected (D-100).** Two
+constants named `PATIENT_FACING_TYPES` existed, in `core/enums` and in
+`security/policy`, holding different sets — one meaning *readable by* the
+patient, the other *written for* her. Both were right for their own module.
+`delivery.py` imported the first, so a note the patient typed herself was
+treated as clinic-authored content that had failed to reach her. Her clinician's
+card listed it under "not yet opened by the patient". Worse, when she edited it,
+her own view led with *"This was updated after you last read it. If you were
+following the earlier version, stop and read this one."* That banner is the
+highest-severity thing this build says to a patient; it means *the clinic
+changed something you already acted on, possibly a dose*. It was firing because
+she added a line to her own note — an alert aimed at the one reader in the
+system with no provenance rail to check it against. We deleted the duplicate
+constant rather than renaming it, because a third name keeps the hazard.
+
+**A dose belonged to whichever drug came first (D-101).** Two modules extract
+medication-plus-dose. They shared a regex — with a comment saying so — and
+disagreed about which drug a dose belongs to. `contradictions` gave the first
+dose in a sentence to every drug in it, so an ordinary line, *"Continue
+metformin 1g BD, amlodipine 5mg OD, atorvastatin 20mg ON"*, generated the claim
+`amlodipine 1g` and then reported a **HIGH-severity dose disagreement between
+two entries that agree**, citing a dose that does not exist for that drug. Our
+own module docstring claims its "failure mode is silence, never a wrong answer".
+That was untrue, and it is the exact false positive we argue elsewhere is worse
+than a gap. The dosage checker had the mirror fault: its 60-character window ran
+past the next drug name, so *"metformin and amlodipine 5mg"* read as metformin
+5mg, tripped the implausible band, and **blocked a patient-facing write with a
+confirmation dialog on correct prose**. One shared extractor now binds each dose
+to its nearest drug, bounded on both sides. Fixing it also closed a silent miss:
+dose-before-drug — *"take 20mg atorvastatin"*, which is how instructions are
+actually written — carried no dose at all, so a decimal slip in that phrasing
+was invisible to the gate built to catch decimal slips.
+
+**Decay walked around our provenance mechanism (D-102).** Scenario 16 asks what
+happens when a highlight cites a source that has since changed. We answered it
+for edits, tested it, and scored ourselves SURVIVES. `decay.compress` replaces
+an entry's content with an extractive summary and — correctly — does not create
+a version, because archival is not an authorship event. But staleness was
+`source_version_number != version_number`, and compression moves neither. So a
+cold entry reported `stale: false` while every character of its content had been
+replaced: a highlight anchored to *"mild ankle swelling"* resolved to `'ing in
+the evenings'` at the same offsets, and clicking it drew a box around that
+fragment in the timeline. That is precisely the "silently point at different
+text" outcome the mechanism exists to prevent. Fixing it exposed that the UI
+half was wrong for **edits** too — the card showed the side-by-side while the
+timeline underneath highlighted the old offsets in the new text.
+
+**The pattern, which is the actual finding.** Three of the four live in a seam
+between two modules that are each correct alone: two constants sharing a name,
+two extractors sharing a regex but not a rule, and a lifecycle transition that
+bypasses a mechanism watching a different variable. Section 10 said all six
+defects of the previous pass shared one cause. This is a different one, and it
+is the one we would now expect to keep producing bugs: **our per-module
+reasoning is dense and mostly right, and our joins are unexamined.** Every
+module in this repo carries a long docstring defending its own behaviour. None
+of them describes what it assumes about the module next to it.
+
+**An assumption that no longer stands.** We wrote, more than once, that this
+build's failure mode is silence — that a gap in a watchlist or a vocabulary
+makes the system less helpful, never wrong. That is true of the vocabulary and
+it was not true of the code around it. Two of these four produced confident
+false statements to a clinician, and one of those blocked their work.
+
+**What this pass did not cover**, stated so the absence of a finding is not read
+as a clean bill: the voice-capture and ASR pipeline, the concurrency paths
+beyond their existing tests, and the learning loop past its accumulator were
+read but not probed with the same adversarial input that produced the four
+above. On the evidence — three of four in module seams — that is where we would
+look next, and specifically at what `capture` assumes about `scribe`.

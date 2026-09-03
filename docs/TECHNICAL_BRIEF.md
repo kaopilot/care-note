@@ -259,7 +259,10 @@ Showing a clinician a hallucinated line is a bad day; showing a patient one is a
 different category of harm — no second reader, no provenance rail, no basis to
 doubt. Rather than generating patient text and requiring sign-off — a step
 people click through under load — no generated text can become patient-facing at
-all. `PATIENT_FACING_TYPES` is writable only by `clinician`; `Role.SYSTEM` can
+all. `security/policy.PATIENT_FACING_TYPES` — one definition, since a second
+constant of that name in `core/enums` meant something different and cost us a
+false correction alert on the patient's own view (D-100) — is writable only by
+`clinician`; `Role.SYSTEM` can
 write nothing; `assert_never_patient_facing()` runs at import against the
 scribe's own type map so a future edit fails loudly; and AI types are absent
 from the patient's viewable set. A clinician may read an AI summary and write an
