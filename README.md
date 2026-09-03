@@ -9,7 +9,7 @@ and server-enforced RBAC.
 > **Synthetic data only.** This is a prototype. It has never been connected to a
 > real medical record and must not be.
 
-**Build status: complete (Phases 0–8).** Longitudinal timeline, AI scribe
+**Build status:** A working prototype Longitudinal timeline, AI scribe
 pipeline, Glance View with provenance click-through, threaded collaboration,
 revision history with revert, conflict handling, contradiction detection,
 adaptive importance, data decay, and ambient voice capture. See
@@ -26,7 +26,6 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
-[`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
 [`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (548 test functions, 872 cases) ·
 `cd frontend && npm test` (85 component tests).
 

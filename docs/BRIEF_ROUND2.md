@@ -1,4 +1,4 @@
-# Care Note — Round Two
+# Care Note — Iteration 2
 
 *Response to the sixteen clinic scenarios and the twelve-capability list.
 Architecture, schema and latency are unchanged and remain in
@@ -14,13 +14,6 @@ test functions (872 parametrised cases) and 85 component tests passing.
 rather than by the pass that found it. The most recent four were live while the
 suite was green, and two of those were misfiring on the two surfaces a patient
 can actually see.
-
-**Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
-PARTIAL: a patient's phone number was travelling in a query string and therefore
-into the access log. Scenario 2 was SURVIVES and is now PARTIAL: we had answered
-*where* clinic isolation is enforced and never measured what happens when that
-one line is wrong — the answer is every patient in both clinics, and nothing
-else catches it. Section 7 covers both.
 
 `pytest tests/test_survival_scenarios.py -v` walks the sixteen scenarios one at
 a time, and fails if its verdicts drift from the table below.
