@@ -3273,6 +3273,17 @@ Three changes, all small:
   honest behaviour; pointing confidently at the wrong words is worse than
   pointing at the note.
 
+**A fourth change, found by fixing the first three.** Marking a compressed entry
+stale made the existing banner render *"the source note changed after this was
+highlighted — v1 → v1"*, because compression moves no version number. A sentence
+that quotes an unchanged number as if it were a change reads like a bug and
+tells a clinician nothing. `stale_reason` now distinguishes `edited` from
+`archived`, and the archived case says the note has been shortened for archiving
+and that the span is not in the shortened copy. Worth noting how this surfaced:
+the wording was not wrong before, because the only way to reach it was an edit.
+Closing a backend gap moved a UI string into a case it had never been written
+for — which is the same seam problem as the defect itself, one layer up.
+
 **Stale does not mean lost.** `anchored_text` still resolves the highlighted
 words against the version snapshot compression does not touch, and
 `decay.archived_original` still returns the full note byte for byte.
@@ -3280,10 +3291,15 @@ words against the version snapshot compression does not touch, and
 trip reaches provenance as well as content — restoring a note makes its
 highlights current again.
 
-**The verdict this changes.** `SCENARIO_COVERAGE.md` recorded scenario 16 as
-SURVIVES on the strength of the edit path. That was true of the edit path and
-untrue of the build, because decay could reach the same content by another
-route. It is corrected there.
+**What this changes in the coverage table.** Scenario 16 was recorded as
+SURVIVES on the strength of the edit path alone. That was true of the edit path
+and not true of the build, because decay reached the same content by a route
+nobody had checked — the verdict was right by luck rather than by construction.
+It stays SURVIVES now that both routes are closed, but the row cites the decay
+test as well, and `SCENARIO_COVERAGE.md` says plainly that it did not hold until
+this pass. A verdict that was accidentally correct is worth flagging: the next
+content-mutating path added to this system will have the same blind spot unless
+someone knows to look for it.
 
 ### D-103 · What the final pass covered, and what it did not
 
