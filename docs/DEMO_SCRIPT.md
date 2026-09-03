@@ -270,9 +270,12 @@ Point to the Malay entry (`Kebas sikit waktu pagi`).
 
 ## 8 — Provenance, and two people typing (scenarios 16, 10) · ~90s
 
-Click a highlight → jumps to the exact span in the source entry.
+Click the top penicillin highlight → jumps to the exact span in its source
+entry, `entry-a1-hist-2025`.
 
-Now edit that source note in the right window. Reload the left.
+Edit that note **in the left window, as `clinician_a`** — it is a
+`clinician_section`, so `staff_a` in the right window gets a 403 on it. That
+refusal is correct and it is not what this segment is about. Reload.
 
 > "Scenario 16: the highlight cites a note that has since changed. It does not
 > silently point at different text — that is the worst of the three options
@@ -280,43 +283,59 @@ Now edit that source note in the right window. Reload the left.
 > against the text it was made from and shows both side by side."
 
 **Then keep going, because this is where our final audit found a defect.** The
-seed already ran the decay policy, so `entry-a1-hist-2026` is archived and one
-highlight points into it — no command needed. Show the policy if you like, but
-say what it is:
+seed already runs the decay policy, so `entry-a1-hist-2026` is archived before
+you start — no command needed. Show the policy if you like, but say what it is:
 
 ```bash
 python scripts/run_decay.py --clinic clinic-a      # preview: 0 changing, 12 unchanged
 ```
 
-Scroll the Glance View to that highlight. It carries the stale marker and says
-*"the source note has been shortened for archiving"* — not a version change,
-because there isn't one. Click it: the timeline scrolls to the note and draws no
-box.
+Scroll the **timeline** to `entry-a1-hist-2026` (Feb 2026). It reads as a
+shortened copy, with the banner *"Every sentence shown was written by the author
+— nothing has been rephrased"* and a **Restore full note** button.
 
 > "Our answer to scenario 16 was version numbers, and it was right for edits.
 > Decay compresses an old note to a summary — and archival is deliberately not
 > an authorship event, so it creates no version. Staleness was a version-number
-> comparison, so a compressed note reported *not stale* while the highlight's
-> offsets pointed into a summary they no longer describe. Note the wording: an
-> archived note gets its own sentence, because the edit one renders as 'v1 to
-> v1' here, which reads like a bug. That is the silently-wrong
-> case, reached by a route the mechanism never watched. Both routes are closed
-> now. Watch what the timeline does here: it scrolls to the note and highlights
-> nothing, because pointing confidently at the wrong words is worse than
-> pointing at the note. That half was wrong for edits too."
+> comparison, which compression moves neither of, so a compressed note reported
+> *not stale* while its highlight's offsets pointed into a summary they no
+> longer describe. The silently-wrong case, reached by a route the mechanism
+> never watched."
 
-Click **Restore full note**.
+This one's highlight is not on the Glance View — a 400-day-old note does not
+rank onto a card capped at seven — so show the fix in the terminal rather than
+implying it is on screen:
 
-> "Stale is not lost. The original is archived byte for byte, the highlighted
-> words still resolve against their version snapshot, and restoring the note
-> makes its highlights current again."
+```bash
+./run_tests.sh tests/test_audit_defects.py -q      # expect: 16 passed
+```
 
-Both windows, same note, same section, type in both, save left then right.
+> "Cold entries are stale by construction now, the archived case gets its own
+> wording because the edit sentence renders as 'v1 to v1' and reads like a bug,
+> and a stale highlight no longer paints a box at coordinates that stopped
+> describing the text. That last half was wrong for edits too — the card showed
+> the comparison correctly while the timeline underneath it highlighted the old
+> offsets in the new text."
+
+Click **Restore full note** — the full text comes back byte for byte.
+
+> "Stale is not lost. The original is archived, the highlighted words still
+> resolve against the version snapshot compression never touched, and restoring
+> the note makes its highlights current again."
+
+For the collision, **log the right window in as `clinician_a` too** — a private
+window is easiest. Two clinicians is the only pairing that can collide: the seed
+has one clinician per clinic, and a clinician and a staff member cannot reach the
+same section to begin with. Open the same note in both, type in both, save left
+then right.
 
 > "Scenario 10. The second save is rejected with a 409, not silently merged and
-> not silently lost — the version they edited is no longer current. No lost
-> updates. But this is not real-time: they find out at save, not at 09:14. No
-> presence, no cursors."
+> not silently lost — the version they edited is no longer current. Note what we
+> had to do to stage this: RBAC already partitions who writes what, so a
+> clinician and a nurse colliding on one section is not a race this system can
+> have. The conflict that survives is two people in the same role, and that is
+> the one we handle. But it is not real-time — they find out at save, not at
+> 09:14. No presence, no cursors."
 
 ---
 
