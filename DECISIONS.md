@@ -1,7 +1,7 @@
 # Decision Log
 
 Running record. Append; never rewrite. If a later phase deviates from a
-decision here, add a new entry saying so and why — don't silently drift.
+decision here, add a new entry saying so and why.
 
 Format: `D-nnn` · date · decision · reasoning · what it costs us.
 
