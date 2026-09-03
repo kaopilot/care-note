@@ -9,8 +9,8 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 528 backend functions
-cd frontend && npm test   # 61 component
+pytest tests/ -q          # 542 backend functions
+cd frontend && npm test   # 67 component
 ```
 
 ---
@@ -30,11 +30,11 @@ cd frontend && npm test   # 61 component
 | 9 | Provider 503 for an hour | **SURVIVES** | `test_failure_modes.py`, `EntryCard.degraded.test.jsx` — degraded, and visibly so since D-082 |
 | 10 | Two people, same note | **SURVIVES** | `test_concurrent_edits.py` |
 | 11 | Link never received | **PARTIAL** | `test_delivery_state.py` (9) — reach modelled; there is no sender |
-| 12 | Patient summary wrong by one dosage | **SURVIVES** | `test_delivery_state.py` (correction path), `test_regeneration_and_dosage.py` (the gate) |
+| 12 | Patient summary wrong by one dosage | **SURVIVES** | `test_delivery_state.py` (correction path), `test_regeneration_and_dosage.py` (the gate), `test_audit_defects.py` — both halves were misfiring until D-100/D-101 |
 | 13 | Allergy asserted vs denied | **SURVIVES** | `test_contradiction_denial.py` (11), `test_contradiction_grouping.py` (6) — one disagreement is one card since D-081 |
 | 14 | A number that means nothing | **SURVIVES** | `test_evaluation_and_abstention.py`, `test_language_risk_floor.py` |
 | 15 | Ranking learns from what it showed | **SURVIVES** | `test_self_learning_importance.py`, `test_protected_surface.py` (7) — critical classes bypass ranking entirely (D-084) |
-| 16 | Highlight cites edited source | **SURVIVES** | `test_highlight_provenance.py`, `Phase9Surfaces.test.jsx` (side-by-side) |
+| 16 | Highlight cites edited source | **SURVIVES** | `test_highlight_provenance.py`, `Phase9Surfaces.test.jsx` (side-by-side), `test_audit_defects.py` (the decay route, closed in D-102) |
 
 **Tally: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT.**
 
@@ -47,6 +47,27 @@ the honest read.
 
 Scenario 7 stayed put, and the test for it asserts the limitation rather than
 papering over it.
+
+**Scenario 16 kept its verdict and lost the reason it deserved it.** It was
+assessed against the edit path — a highlight anchored to v1 of a note now at v3
+— which works and is tested. The final pass found a second route to the same
+outcome: `decay.compress` replaces an entry's content without creating a
+version, and staleness was a version-number comparison, so a compressed entry
+reported `stale=false` while a highlight's offsets pointed at a mid-word
+fragment of the summary. Both routes are closed now (D-102) and the row cites
+both. Recording it because the verdict was accidentally correct rather than
+correct by construction, and the next content-mutating path added to this system
+will have the same blind spot unless someone knows to look for it.
+
+**Scenarios 11 and 12 were reporting on the wrong content.** `delivery` imported
+a constant that included `patient_note`, so a note the patient wrote herself was
+counted as clinic-authored content that had not reached her — and editing it
+made her own view lead with the correction banner, which is the one alert in
+this build aimed at a reader who cannot check it against anything. The dosage
+gate had the mirror-image fault: a window that ran past the next drug name made
+"metformin and amlodipine 5mg" read as metformin 5mg and blocked an ordinary
+patient-facing write. Both fixed (D-100, D-101). The verdicts stand; what they
+rested on did not, until now.
 
 ---
 
