@@ -26,6 +26,15 @@ Two states are honest today and one is deliberately absent:
 * ``dispatched`` is **not** modelled, because nothing dispatches. Inventing the
   state would be the same false assurance in a new place.
 
+**Scope: content the clinic wrote FOR the patient.** That is
+`policy.PATIENT_FACING_TYPES` — `patient_summary` and `patient_instruction` —
+and specifically *not* `patient_note`, which the patient writes herself. This
+module asks "did what we sent her land?", and her own words are not something
+that can fail to reach her. Importing the wrong set made the clinician's card
+report a note she had just typed as "not yet opened by the patient", and made
+her own view lead with "this was updated after you last read it" when she
+edited it. See DECISIONS.md D-100.
+
 See DECISIONS.md D-074.
 """
 
@@ -36,7 +45,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.enums import PATIENT_FACING_TYPES, Role
+from app.core.enums import Role
+from app.security.policy import PATIENT_FACING_TYPES
 from app.models import Entry, Patient, PatientView, User, Version
 
 UNREAD = "unread"

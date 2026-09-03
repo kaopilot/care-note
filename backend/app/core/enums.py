@@ -38,9 +38,19 @@ AI_SCRIBED_TYPES = frozenset(
     }
 )
 
-PATIENT_FACING_TYPES = frozenset(
-    {EntryType.PATIENT_SUMMARY, EntryType.PATIENT_INSTRUCTION, EntryType.PATIENT_NOTE}
-)
+# NOTE: there is deliberately no `PATIENT_FACING_TYPES` here.
+#
+# There was, and it held three types — the two written *for* the patient plus
+# `PATIENT_NOTE`, which the patient writes *herself*. `security/policy.py` has a
+# constant of the same name holding only the first two. Two modules imported
+# "PATIENT_FACING_TYPES", got different sets, and neither import site looked
+# wrong (D-100).
+#
+# The three-type set was only ever "what a patient may read", which is already
+# `policy.VIEWABLE_TYPES[Role.PATIENT]` — the authoritative copy. So it is gone
+# rather than renamed: a second spelling of an existing table is what let the
+# two drift in the first place. For "written for the patient", import
+# `app.security.policy.PATIENT_FACING_TYPES`.
 
 
 class InteractionType(StrEnum):
