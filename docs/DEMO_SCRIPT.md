@@ -13,9 +13,10 @@ green ticks makes every other claim in it worth less.
 ## Setup (before recording)
 
 ```bash
-# terminal 1 — API
+# terminal 1 — API. `tee` so segment 4 can grep the log it is writing.
 cd backend && source .venv/bin/activate
-python init_db.py --reset && uvicorn app.main:app          # :8000
+python init_db.py --reset
+uvicorn app.main:app 2>&1 | tee /tmp/carenote.log          # :8000
 
 # terminal 2 — UI
 cd frontend && npm run dev                                 # :5173
@@ -139,26 +140,59 @@ Terminal:
 
 ---
 
-## 4 — The doors nobody guards (scenarios 3, 4) · ~75s
+## 4 — The doors nobody guards (scenarios 3, 4) · ~110s · **mostly live**
+
+Scenario 3 says *grep your logs*. That is an action, not a claim, so do it on
+camera rather than pointing at a test.
+
+Left window as `clinician_a` → **Capture a consult** → **Paste a transcript**.
+Type something with all three kinds of identifier in it:
+
+```
+Dr Lim: Good morning Amira Rahman. Confirm your number is 019-888 7777
+and IC 680311-14-5566.
+Patient: Yes doctor.
+Dr Lim: Your HbA1c is 8.4 percent.
+```
+
+Submit, then open the transcript panel on the entry it creates.
+
+> "That is the transcript as stored — name, phone and IC replaced before any of
+> it reached a model. The card says five identifiers redacted, and the panel
+> shows the same count. This is what the model saw."
+
+Now terminal 3, against the log the server is writing in terminal 1:
+
+```bash
+grep -c "019-888 7777\|0198887777\|680311\|Amira\|HbA1c" /tmp/carenote.log   # 0
+tail -2 /tmp/carenote.log
+```
+
+> "Zero. Not the phone, not the IC, not her name — and not the clinical content
+> either, because logging a note body is the same leak wearing a different hat.
+> What the log does carry is an actor id, an action, a target id, a clinic and a
+> timestamp. That is enough to answer *who did what to which record when*, which
+> is what an audit log is for, and not enough to reconstruct anything about her."
+
+> "One of these was ours. Scenario 1 wanted a patient identified by phone
+> number, and the enrolment route we built for it passed that number as a query
+> parameter — the access log records the full request line before our code runs,
+> so neither the audit logger nor the error middleware could have stopped it.
+> The feature built for scenario 1, leaking through the door scenario 3 asks
+> about. That is why scenario 3 is partial, not survives."
+
+**Scenario 4 is the one place a test is the honest answer.** "Prove the
+ordering" is a claim about the call path, and no screen can show a path:
 
 ```bash
 ./run_tests.sh tests/test_llm_chokepoint.py tests/test_url_surface.py -q
 ```
 
-> "Scenario 4 asks us to prove redaction runs before the model. It is not a
-> code comment — a test scans the source and fails if any module but the wrapper
-> can reach a provider."
-
-> "Scenario 3 asks about the other doors. Two were open. Crash logs: SQLAlchemy
-> puts bound parameters in exception messages, so one unhandled error put a
-> name, an NRIC and note content in a single line. Then the one we found
-> auditing ourselves — the access log records the full request line before our
-> code runs, and our *own* enrolment route was passing the patient's phone
-> number as a query parameter. The feature built for scenario 1, leaking through
-> scenario 3. It is in the body now, and a test pins that no route can take
-> patient data in a URL again."
-
----
+> "The first scans every module and fails if anything but the wrapper can reach
+> a provider, so redaction-before-model is a property of the import graph rather
+> than a convention someone remembers. The redacted transcript you just saw is
+> the artefact of that ordering; the test is what says no path exists around it.
+> The second pins that no route can take patient data in a URL again."
 
 ## 5 — The model hangs, then dies (scenarios 8, 9) · ~75s
 

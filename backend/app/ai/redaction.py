@@ -59,6 +59,23 @@ PHONE_CUE_RE = re.compile(
 )
 INTL_PHONE_RE = re.compile(r"\+\d{1,3}[\s.-]?\d[\d\s().-]{5,16}\d")
 SG_LOCAL_PHONE_RE = re.compile(r"\b[89]\d{3}[\s-]?\d{4}\b")
+# Malaysian local numbers, which the Singapore pattern above cannot reach: they
+# lead with a trunk `0`, so they are 9-11 digits rather than 8.
+#
+# This was missing, and the omission mattered more than a gap usually does. A
+# Malaysian mobile written the ordinary way — `019-888 7777` — was only redacted
+# when it happened to follow a cue word like "call" or "hp". "Confirm your
+# number is 019-888 7777" has no cue, so the number reached the model, the
+# stored transcript, and the transcript panel on screen. The seed's own patient
+# carries `0198887777` as her identifier, and the brief is explicit that this
+# build is for SEA; a locale pattern for the neighbouring country and none for
+# this one is not a considered trade-off, it is something nobody noticed.
+#
+# Bounded deliberately: trunk zero, then 9-11 digits total in 2-3 groups. It
+# runs after the NRIC/MyKad passes, so an identity number that also opens with a
+# zero (anyone born from 2000) is already `[ID_n]` before this sees it.
+# See DECISIONS.md D-105.
+MY_LOCAL_PHONE_RE = re.compile(r"\b0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}\b")
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
@@ -253,6 +270,7 @@ class _Redactor:
         text = self._sub(PHONE_CUE_RE, text, "phone", group=1)
         text = self._sub(INTL_PHONE_RE, text, "phone")
         text = self._sub(SG_LOCAL_PHONE_RE, text, "phone")
+        text = self._sub(MY_LOCAL_PHONE_RE, text, "phone")
 
         # Names: honorific/label-anchored patterns, then the gazetteer.
         text = self._sub(HONORIFIC_RE, text, "name", group=1)
@@ -329,6 +347,7 @@ RESIDUAL_PHI_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("email", EMAIL_RE),
     ("intl_phone", INTL_PHONE_RE),
     ("sg_phone", SG_LOCAL_PHONE_RE),
+    ("my_phone", MY_LOCAL_PHONE_RE),
 )
 
 

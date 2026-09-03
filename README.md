@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (543 test functions, 867 cases) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (548 test functions, 872 cases) ·
 `cd frontend && npm test` (78 component tests).
 
 ---
@@ -126,7 +126,7 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-./run_tests.sh                    # from anywhere in the repo — 543 test functions
+./run_tests.sh                    # from anywhere in the repo — 548 test functions
 ```
 
 Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
@@ -143,12 +143,12 @@ pytest tests/ -v                      # ...but run from the repository root
 errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
-543 backend test functions — 867 collected cases once parametrisation is
+548 backend test functions — 872 collected cases once parametrisation is
 expanded — plus 78 frontend component tests. All passing, no API key or network
 required. Roughly 60 seconds.
 
 The two numbers differ because 44 functions are parametrised, and the honest one
-to quote is **543**. A single assertion applied to 49 routes is one test, not
+to quote is **548**. A single assertion applied to 49 routes is one test, not
 49, and a suite that reports the larger figure is padding its own scorecard.
 
 To run just the four files the brief names:
@@ -833,6 +833,14 @@ README exists not to do.
   (D-102). The full original is restorable, but until someone restores it there
   is no live text to put side by side — an honest gap rather than a fabricated
   comparison.
+- **The residual-PHI tripwire shares its patterns with the redactor.** So it
+  cannot catch a format the redactor does not describe — it reported a
+  Malaysian mobile as clean because neither knew the shape (D-105, and D-095
+  before it). A genuinely independent check is the right answer and is not
+  written.
+- **Phone redaction is pattern-based per locale.** Singapore local, Malaysian
+  local, international with a `+`, and anything following a cue word like
+  "call" or "hp". A number in an unlisted national format still travels.
 - **No client-side routing.** Patient selection is React state, so there is no
   address bar to paste a patient id into and no deep link to a note. That is
   partly deliberate — keeping patient ids out of browser history and referrer

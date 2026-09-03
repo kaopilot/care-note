@@ -9,7 +9,7 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 543 backend functions
+pytest tests/ -q          # 548 backend functions
 cd frontend && npm test   # 78 component
 ```
 

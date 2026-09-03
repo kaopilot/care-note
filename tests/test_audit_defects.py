@@ -40,6 +40,7 @@ from app.core.enums import (
     Role,
 )
 from app.models import Entry, Highlight, Patient, PatientView, Version
+from app.ai import redaction
 from app.services import contradictions, decay, delivery, dosage
 from app.services import highlights as highlight_service
 
@@ -377,3 +378,86 @@ def test_restoring_an_entry_makes_its_highlights_current_again(seeded):
     assert entry.content == _BODY
     assert highlight_service.is_stale(highlight, entry) is False
     assert highlight_service.current_text(entry, highlight) == "mild ankle swelling"
+
+
+# --------------------------------------------------------------------------
+# 5. A Malaysian mobile is a phone number (D-105)
+# --------------------------------------------------------------------------
+#
+# Found by running a consult transcript through the capture pipeline and reading
+# what the transcript panel would put on screen. The name and the IC came back
+# redacted; the phone number did not. There was a Singapore local pattern and no
+# Malaysian one, so a MY mobile was only caught when it happened to follow a cue
+# word — and "confirm your number is 019-888 7777" has no cue.
+
+
+MY_FORMATS = [
+    "019-888 7777",   # how it is normally written
+    "019 888 7777",
+    "0198887777",
+    "012-345 6789",
+    "03-7960 1234",   # landline
+]
+
+
+def test_a_malaysian_number_is_redacted_however_it_is_written():
+    for number in MY_FORMATS:
+        assert redaction.redact_phi(number) == "[PHONE_1]", number
+
+
+def test_a_malaysian_number_is_redacted_without_a_cue_word():
+    """The sentence that exposed this, from a real consult transcript.
+
+    The cue-anchored pattern wants "call", "hp", "tel". A clinician confirming a
+    number says "your number is", which is not a cue, so the number travelled to
+    the model and into the stored transcript.
+    """
+    out = redaction.redact_phi(
+        "Confirm your number is 019-888 7777 and IC 680311-14-5566."
+    )
+    assert "019" not in out and "7777" not in out
+    assert out == "Confirm your number is [PHONE_1] and IC [ID_1]."
+
+
+def test_the_residual_tripwire_also_sees_it():
+    """The fail-closed check has to know about the pattern too.
+
+    `find_residual_phi` shares its regexes with the redactor, which D-095 flagged
+    as a hazard and this build accepted. The consequence is concrete: before this
+    fix the redactor missed a MY mobile *and* the tripwire reported the output
+    clean, so nothing anywhere in the system noticed.
+    """
+    assert redaction.find_residual_phi("call me on 019-888 7777") != []
+    assert redaction.find_residual_phi(redaction.redact_phi("hp 019-888 7777")) == []
+
+
+def test_clinical_numbers_are_not_mistaken_for_phone_numbers():
+    """The cost of a looser pattern is false positives, so bound it.
+
+    Redaction is accuracy as much as privacy — the hint says so directly. A
+    pattern that ate `BP 120/80` or a dose would corrupt the clinical record to
+    protect a number that was never there.
+    """
+    untouched = [
+        "BP 120/80, HbA1c 8.4%",
+        "metformin 1g BD, amlodipine 5mg OD",
+        "Seen 03 Feb 2026",
+        "Weight 74.2kg, eGFR 88",
+        "Dose 0.5 mg nightly",
+        "Temperature 37.2, pulse 88",
+    ]
+    for text in untouched:
+        assert redaction.redact_phi(text) == text, text
+
+
+def test_an_identity_number_starting_with_zero_is_still_an_id():
+    """Anyone born from 2000 has an NRIC that opens with a zero.
+
+    The MY phone pattern would match it, so ordering carries the correctness:
+    the NRIC and MyKad passes run first and the phone pass never sees it. If
+    that order were swapped, an identity number would be labelled `[PHONE_n]` —
+    still redacted, but the wrong category in the audit trail.
+    """
+    out = redaction.redact_phi("IC 010311-14-5566 registered today.")
+    assert "[ID_1]" in out
+    assert "PHONE" not in out

@@ -7,8 +7,8 @@ Per-scenario verdicts and their tests are in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).*
 
 **Where we landed: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios, from
-6 · 6 · 4 in our own first assessment. Decisions D-070 to D-103, 543 backend
-test functions (867 parametrised cases) and 78 component tests passing.
+6 · 6 · 4 in our own first assessment. Decisions D-070 to D-105, 548 backend
+test functions (872 parametrised cases) and 78 component tests passing.
 
 **Section 7 is the whole of what auditing ourselves turned up**, grouped by cause
 rather than by the pass that found it. The most recent four were live while the

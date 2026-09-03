@@ -3390,3 +3390,52 @@ wrong-clinic wording alone and leaving the divergence untested.
 claimed as one. `AccessScope.query` still is, still singularly (D-085), and
 scenario 2 remains PARTIAL for that reason — the panel makes the refusal
 watchable, and the mutation test is still what proves it happens server-side.
+
+### D-105 · There was a Singapore phone pattern and no Malaysian one
+
+Found while working out whether scenarios 3 and 4 can be shown live rather than
+only as a passing test. Running a consult transcript through the capture
+pipeline and reading what the transcript panel would put on screen:
+
+    Good morning [NAME_3]. Confirm your number is 019-888 7777 and IC [ID_1].
+
+The name was caught by the gazetteer, the IC by the MyKad pattern, and the phone
+number was not caught by anything.
+
+`redaction.py` had three phone passes: a **cue-anchored** one requiring a word
+like `tel`, `hp`, `call` or `contact` nearby; an **international** one requiring
+a leading `+`; and an **8-digit Singapore local** one. A Malaysian number leads
+with a trunk zero and runs to 9–11 digits, so it matched none of them. It was
+redacted only when a cue word happened to precede it — `call me on 019-888 7777`
+worked, `confirm your number is 019-888 7777` did not, and the second is how a
+clinician actually says it.
+
+This is not a considered trade-off. The brief is explicit that this build is for
+SEA, the seeded patient carries `0198887777` as her identifier, and a locale
+pattern existed for the neighbouring country. Nobody wrote the one for this one.
+
+**Two things made it invisible.** `find_residual_phi` — the fail-closed tripwire
+that is supposed to notice PHI surviving the redactor — shares its regex list
+with the redactor, so it reported the output clean. D-095 named that hazard
+exactly (*a check and its own test must not share an implementation*) and this
+build accepted the sharing. Here is the second instance of the same cause, in
+the same module, for a different pattern: the redactor cannot miss something the
+tripwire will catch, because they are looking with the same eyes. And the
+property tests generate identifiers from the patterns under test, so a format no
+pattern describes is a format no test generates.
+
+**The fix is bounded rather than permissive**, because redaction is accuracy as
+much as privacy: trunk zero, then 9–11 digits in two or three groups. A pattern
+loose enough to eat `BP 120/80` or a dose would corrupt the clinical record to
+protect a number that was never there, and
+`test_clinical_numbers_are_not_mistaken_for_phone_numbers` pins that direction.
+Ordering carries a correctness requirement too — anyone born from 2000 has an
+NRIC starting with a zero, which this pattern would match, so the NRIC and MyKad
+passes run first and the phone pass never sees it. Swapping that order would
+still redact the number but file it under the wrong category in the audit trail.
+
+**What is still not fixed.** The tripwire still shares its patterns with the
+redactor. A genuinely independent check — a different implementation, ideally a
+different author's — is the correct answer and is not a change to make at the
+end of an audit pass. Recorded here as the second occurrence, so the next person
+weighing it has two data points rather than one.
