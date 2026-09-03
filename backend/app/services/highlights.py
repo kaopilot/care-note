@@ -428,6 +428,22 @@ def is_stale(highlight: Highlight, entry: Entry) -> bool:
     return highlight.source_version_number != entry.version_number
 
 
+def stale_reason(highlight: Highlight, entry: Entry) -> str | None:
+    """Why this highlight is stale — `edited`, `archived`, or None.
+
+    The two are stale for different reasons and the clinician needs different
+    words for them. An edit moved the version number, so "v2 → v5" says what
+    happened. Compression moves no version number, so the same sentence renders
+    as "v1 → v1", which reads like a bug and tells nobody anything. See
+    DECISIONS.md D-102.
+    """
+    if str(entry.decay_state) == str(DecayState.COLD):
+        return "archived"
+    if highlight.source_version_number != entry.version_number:
+        return "edited"
+    return None
+
+
 def current_text(entry: Entry, highlight: Highlight) -> str | None:
     """Whatever now occupies the highlight's coordinates in the live entry.
 

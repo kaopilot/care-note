@@ -64,6 +64,7 @@ function staleHighlight(overrides = {}) {
     created_by_role: 'system',
     is_manual: false,
     stale: true,
+    stale_reason: 'edited',
     source_version_number: 2,
     entry_version_number: 5,
     entry_type: 'staff_note',
@@ -126,6 +127,46 @@ describe('stale highlight', () => {
     expect(
       screen.getByText(/This part of the note no longer exists/)
     ).toBeTruthy()
+  })
+
+  // An archived entry is stale at the SAME version number it was highlighted
+  // at, because compression does not create a version (D-102). The edit
+  // wording renders as "v1 -> v1" for it, which reads like a bug and explains
+  // nothing, so the two reasons get different sentences.
+  it('explains an archived source without quoting a version change', () => {
+    render(
+      <GlanceView
+        glance={glanceFixture({
+          highlights: [
+            staleHighlight({
+              stale_reason: 'archived',
+              source_version_number: 1,
+              entry_version_number: 1,
+              current_span_text: null,
+            }),
+          ],
+        })}
+        onJumpTo={() => {}}
+        onChanged={() => {}}
+        canDecide
+      />
+    )
+    expect(screen.getByText(/shortened for archiving/)).toBeTruthy()
+    expect(screen.getByText(/Not in the shortened copy/)).toBeTruthy()
+    expect(screen.queryByText(/v1 . v1/)).toBeNull()
+  })
+
+  it('still quotes the version change when the source was edited', () => {
+    render(
+      <GlanceView
+        glance={glanceFixture({ highlights: [staleHighlight()] })}
+        onJumpTo={() => {}}
+        onChanged={() => {}}
+        canDecide
+      />
+    )
+    expect(screen.getByText(/v2 . v5/)).toBeTruthy()
+    expect(screen.queryByText(/shortened for archiving/)).toBeNull()
   })
 
   it('draws no comparison block for a highlight that is not stale', () => {

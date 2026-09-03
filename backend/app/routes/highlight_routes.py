@@ -76,6 +76,7 @@ class HighlightOut(BaseModel):
     created_by_role: str
     is_manual: bool
     stale: bool
+    stale_reason: str | None = None
     source_version_number: int
     entry_type: str
     entry_title: str | None
@@ -122,6 +123,7 @@ def _highlight_out(
         created_by_role=str(highlight.created_by_role),
         is_manual=highlight.created_by_role != Role.SYSTEM,
         stale=highlight_service.is_stale(highlight, entry),
+        stale_reason=highlight_service.stale_reason(highlight, entry),
         source_version_number=highlight.source_version_number,
         entry_type=str(entry.type),
         entry_title=entry.title,

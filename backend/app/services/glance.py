@@ -372,6 +372,10 @@ def _top_highlights(
                 "created_by_role": str(row.created_by_role),
                 "is_manual": row.created_by_role != Role.SYSTEM,
                 "stale": stale,
+                # `edited` or `archived`. Version numbers explain the first and
+                # are silent about the second — a compressed entry is stale at
+                # the same version number it was highlighted at (D-102).
+                "stale_reason": highlight_service.stale_reason(row, entry),
                 # Both sides, so the UI can show them together rather than
                 # making the clinician choose which one to trust blind.
                 # `span_text` is what was highlighted, resolved against the

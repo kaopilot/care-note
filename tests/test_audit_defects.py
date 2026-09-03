@@ -342,6 +342,27 @@ def test_the_highlighted_words_survive_compression(seeded):
     assert decay.archived_original(db, entry) == _BODY
 
 
+def test_stale_carries_the_reason_it_is_stale(seeded):
+    """"Edited" and "archived" need different words in front of a clinician.
+
+    Compression leaves the version number alone, so the edit wording renders as
+    "v1 → v1" — a sentence that reads like a bug and explains nothing. Surfacing
+    the reason is what let the UI say something true about each case.
+    """
+    db = seeded["db"]
+    entry, highlight = _entry_with_highlight(db)
+    assert highlight_service.stale_reason(highlight, entry) is None
+
+    entry.version_number = 2
+    assert highlight_service.stale_reason(highlight, entry) == "edited"
+
+    entry.version_number = 1
+    decay.compress(db, entry)
+    db.commit()
+    assert entry.version_number == 1
+    assert highlight_service.stale_reason(highlight, entry) == "archived"
+
+
 def test_restoring_an_entry_makes_its_highlights_current_again(seeded):
     """Reversibility is the reason cold is safe. It has to reach provenance too."""
     db = seeded["db"]

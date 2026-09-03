@@ -370,14 +370,16 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                       {highlight.stale && (
                         <div className="mt-2 rounded border border-amber-300 bg-amber-50/70 p-2">
                           <p className="text-[11px] font-medium text-amber-950">
-                            The source note changed after this was highlighted —
-                            v{highlight.source_version_number} → v
-                            {highlight.entry_version_number}
+                            {highlight.stale_reason === 'archived'
+                              ? 'The source note has been shortened for archiving since this was highlighted.'
+                              : `The source note changed after this was highlighted — v${highlight.source_version_number} → v${highlight.entry_version_number}`}
                           </p>
                           <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
                             <div className="rounded bg-white p-1.5 ring-1 ring-amber-200">
                               <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-                                Highlighted (v{highlight.source_version_number})
+                                {highlight.stale_reason === 'archived'
+                                  ? 'Highlighted (full note)'
+                                  : `Highlighted (v${highlight.source_version_number})`}
                               </span>
                               <span className="mt-0.5 block text-xs italic leading-snug text-slate-900">
                                 "{highlight.span_text}"
@@ -385,12 +387,16 @@ export default function GlanceView({ glance, timing, onJumpTo, onChanged, canDec
                             </div>
                             <div className="rounded bg-white p-1.5 ring-1 ring-slate-200">
                               <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                Now at that position (v{highlight.entry_version_number})
+                                {highlight.stale_reason === 'archived'
+                                  ? 'In the shortened copy'
+                                  : `Now at that position (v${highlight.entry_version_number})`}
                               </span>
                               <span className="mt-0.5 block text-xs italic leading-snug text-slate-700">
                                 {highlight.current_span_text
                                   ? `"${highlight.current_span_text}"`
-                                  : 'This part of the note no longer exists.'}
+                                  : highlight.stale_reason === 'archived'
+                                    ? 'Not in the shortened copy — restore the full note to see it in place.'
+                                    : 'This part of the note no longer exists.'}
                               </span>
                             </div>
                           </div>
