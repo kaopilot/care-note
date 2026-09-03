@@ -9,8 +9,8 @@ does not survive, the row says so — a page of green ticks would be less use to
 reviewer than an accurate one.
 
 ```bash
-pytest tests/ -q          # 542 backend functions
-cd frontend && npm test   # 67 component
+pytest tests/ -q          # 543 backend functions
+cd frontend && npm test   # 69 component
 ```
 
 ---
@@ -86,7 +86,7 @@ rested on did not, until now.
 | AI regeneration preserving human-confirmed state | **SURVIVES** | Reuses the entry so accepted highlights, comments and tasks survive; **refuses outright** when a human has edited (D-078) |
 | Contradictory human / patient / AI assertions | **PARTIAL** | Five classes, both sides cited, `human_human` and `same_entry` marked, deliberately never resolved (D-068, D-073, D-089). Recall is bounded by a 17-drug watchlist, not a formulary — the failure mode is silence |
 | Audience-appropriate outputs | **PARTIAL — by refusal** | Separate patient view in plain language with a distinct visual register. The system does **not** generate per audience: no machine text can become patient-facing at all (D-067), so a clinician writes it. That is a deliberate non-implementation, not a gap we missed |
-| Self-learning: clinic-scoped, bounded, auditable, fatigue-resistant, exposure-bias evaluated | **PARTIAL** | Clinic-scoped, bounded and auditable all hold: per-clinic weights, saturation, 90-day half-life, `NEVER_DAMPENED` floors, `/clinic/learning`. **Not evaluated** — the exploration slot is per-entry novelty, not clinic feedback history, and nothing measures residual bias (D-069 corrected, D-091) |
+| Self-learning: clinic-scoped, bounded, auditable, fatigue-resistant, exposure-bias evaluated | **PARTIAL** | Clinic-scoped, bounded and auditable all hold: per-clinic weights, saturation, 90-day half-life, `NEVER_DAMPENED` floors, `/clinic/learning`. **Evaluated, and the number is not flattering** — `scripts/eval_learning.py` reports exposure concentration **0.77** on the seeded clinic: ten of thirteen visible slots go to tags this clinic has already given feedback on (D-092). Still PARTIAL because the exploration slot is per-entry novelty rather than clinic feedback history, so the measurement names the bias without correcting it (D-069 corrected, D-091) |
 
 **Tally: 4 SURVIVES · 7 PARTIAL · 1 DOES NOT.**
 

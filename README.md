@@ -27,8 +27,8 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (542 test functions, 866 cases) ·
-`cd frontend && npm test` (67 component tests).
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (543 test functions, 867 cases) ·
+`cd frontend && npm test` (69 component tests).
 
 ---
 
@@ -126,7 +126,7 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-./run_tests.sh                    # from anywhere in the repo — 542 test functions
+./run_tests.sh                    # from anywhere in the repo — 543 test functions
 ```
 
 Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
@@ -143,12 +143,12 @@ pytest tests/ -v                      # ...but run from the repository root
 errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
-542 backend test functions — 866 collected cases once parametrisation is
-expanded — plus 67 frontend component tests. All passing, no API key or network
+543 backend test functions — 867 collected cases once parametrisation is
+expanded — plus 69 frontend component tests. All passing, no API key or network
 required. Roughly 60 seconds.
 
 The two numbers differ because 44 functions are parametrised, and the honest one
-to quote is **542**. A single assertion applied to 49 routes is one test, not
+to quote is **543**. A single assertion applied to 49 routes is one test, not
 49, and a suite that reports the larger figure is padding its own scorecard.
 
 To run just the four files the brief names:
