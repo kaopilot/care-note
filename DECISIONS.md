@@ -3123,3 +3123,205 @@ because they fail differently: the example test names the intent and points at a
 line, the property test covers the space and shrinks to a minimal counterexample.
 That is a defensible reason to duplicate, and it is still duplication; a leaner
 suite could drop four functions and lose the clearer failure messages.
+
+### D-100 · One name meant two things, and the patient was told her own note had been corrected
+
+`delivery.py` imported `PATIENT_FACING_TYPES` from `app.core.enums`, which held
+three types — `patient_summary`, `patient_instruction`, and `patient_note`.
+`dosage_gate.py` imported a constant of the same name from
+`app.security.policy`, which held two: the same list without `patient_note`.
+
+Both sets were correct for their own module. `policy`'s means **written for the
+patient**, and gates authorship — only a clinician may author one, and no
+generated text may ever become one (D-067). `enums`' meant **readable by the
+patient**, which is a different question with a different answer. Nothing was
+wrong with either definition. What was wrong is that `from ... import
+PATIENT_FACING_TYPES` had two possible answers and neither import site looked
+suspicious.
+
+Delivery got the wrong one, and delivery is the module that answers "did what we
+sent her actually land?". So a note the patient typed herself was treated as
+clinic-authored content that had failed to reach her:
+
+* the clinician's Glance View listed it under **"Not yet opened by the
+  patient"**, and counted it in `unread_count` — a number read at a glance to
+  decide whether to chase someone;
+* and when she edited it, her own view led with **"This was updated after you
+  last read it. Please check it again — if you were following the earlier
+  version, stop and read this one."**
+
+The second is the serious one. That banner is the highest-severity thing the
+patient view can say, deliberately placed above everything else, and it means
+*the clinic changed something you already acted on, possibly a dose*. Firing it
+because she added a line to her own note is scenario 12's alert aimed at the one
+reader in the system with no way to distinguish a real warning from a spurious
+one — and no provenance rail to check it against. This is the alert-fatigue
+failure the build argues about elsewhere (D-041, D-079), reached by a naming
+collision rather than by a scoring decision.
+
+**Fixed by deleting the `enums` constant rather than renaming it.** Its contents
+were only ever "what a patient may read", which is already
+`policy.VIEWABLE_TYPES[Role.PATIENT]` — the authoritative table that RBAC
+enforces from. A second spelling of an existing table is what let the two drift,
+so a third name would have preserved the hazard in a new shape. Delivery now
+imports from `policy`, and `delivery.py`'s docstring states the scope in words
+rather than leaving it to the import line.
+
+**What this does not fix.** Nothing stops a future module importing the right
+constant and meaning the wrong thing by it. `test_audit_defects.py` pins the
+behaviour — a patient note produces no delivery row and no correction banner —
+which is the part that mechanises. The naming discipline is not testable and is
+now at least written down.
+
+### D-101 · A dose belonged to whichever drug was mentioned first
+
+Two modules extract medication-plus-dose from free text. They agreed on what a
+dose looks like — `dosage._DOSE` carries a comment saying it matches
+`contradictions._DOSE` deliberately — and disagreed about which drug the dose
+belongs to. Both were wrong, in the same direction, and the shared regex made
+them look aligned.
+
+**`contradictions._extract_claims` took the first dose in the sentence and gave
+it to every drug named in that sentence.** So an ordinary reconciliation line:
+
+    Continue metformin 1g BD, amlodipine 5mg OD, atorvastatin 20mg ON.
+
+produced the claims `amlodipine 1g` and `atorvastatin 1g`. Against any later
+note that correctly recorded amlodipine 5mg, the Glance View then reported a
+**HIGH-severity dose disagreement between two entries that agree**, citing a
+dose that does not exist for that drug — amlodipine's maximum is 10mg. The
+module's own docstring says its "failure mode is silence, never a wrong answer".
+That claim was false, and this is the class of false positive it argues is worse
+than a gap: a flag that is confidently wrong about an easy case teaches people
+the flag means nothing, which disarms it for the allergy case it exists for.
+
+**`dosage.check_text` was more careful and still wrong.** It searched a
+60-character window *after* the drug name — the right idea — but the window had
+no right-hand edge, so it ran straight through the next drug name. "Discussed
+metformin and amlodipine 5mg daily" read as metformin 5mg, which is an order of
+magnitude under metformin's range, which makes it `implausible`, which is the
+band that **blocks**. A clinician writing that ordinary sentence into a
+patient-facing entry got a 409 and a confirmation dialog insisting a dose was
+far outside the usual adult range. The gate meant to catch a decimal slip was
+firing on correct prose, on the highest-friction surface in the build.
+
+Both are one defect: a window with no boundary. Fixed with one shared function,
+`dosage.drug_doses`, which both modules now call:
+
+* look forward from the drug name, but **never past the next drug name**;
+* if nothing is there, look back a short way, **never past the previous drug
+  name**, and only accept a dose that is essentially adjacent.
+
+**The backward pass is not symmetry for its own sake.** Dose-before-drug is how
+instructions are actually written — "take 20mg atorvastatin at night" — and the
+forward-only window saw no dose there at all. That is a silent miss on the
+patient-facing path, which means "take 800mg atorvastatin" was also unseen. The
+gate had a blind spot in exactly the phrasing it most needed to read. It is
+bounded tightly (30 characters, and the dose must sit within 6 characters of the
+drug name) because looking backwards is where false positives come from;
+`test_a_nearby_number_that_is_not_a_dose_is_not_read_as_one` pins that cost.
+
+**Recall is still a watchlist, not a formulary.** A drug absent from
+`features.MEDICATIONS` carries no dose and produces no finding — unchanged, and
+still the honest limit stated in `ARCHITECTURE.md`. What changed is that a drug
+that *is* on the watchlist no longer inherits its neighbour's figure.
+
+### D-102 · Compression is a content change, and provenance could not see it
+
+Scenario 16 asks what happens when a highlight cites a source that has since
+been edited. The build answers that well for edits: `source_version_number` is
+recorded on every highlight, `anchored_text` resolves against the version
+snapshot rather than live text, and the UI shows both sides. The mechanism is
+sound and it had one blind spot big enough to drive the scenario through.
+
+**`decay.compress` replaces `Entry.content` with an extractive summary and does
+not create a `Version`.** That is the correct design — archival is not an
+authorship event, and writing it into the clinical revision history would make
+the audit trail claim a person edited a note nobody touched. But staleness was
+defined as `highlight.source_version_number != entry.version_number`, and
+compression moves neither number. So a cold entry reported `stale=False` while
+every character of its content had been replaced.
+
+Reproduced on a 400-day-old note: a highlight anchored to `"mild ankle
+swelling"` came back with `stale: False`, no side-by-side, no warning — and its
+offsets pointed at `'ing in the evenings'` in the compressed summary. Clicking
+it in the Glance View called `jumpTo`, which emphasises those offsets against
+live content, so the timeline drew a box around a fragment starting mid-word.
+That is precisely the "silently point at different text" outcome the whole
+mechanism exists to prevent, reached by a path the mechanism never checked.
+
+**Why the protection rules did not cover it.** `decay._protection_reason` holds
+an entry at warm if it carries a **clinician-confirmed** highlight. Suggested
+highlights are not protected — and suggested highlights are exactly what sits on
+the Glance View awaiting accept or reject. The learning loop's input was the
+unprotected case.
+
+Three changes, all small:
+
+* `is_stale` returns True for any `COLD` entry. A summary matches no version
+  snapshot by construction, so every highlight on it is stale whatever the
+  version number says.
+* `current_text` returns None for a cold entry rather than slicing. The offsets
+  index the original and the content is a different string; a fragment rendered
+  where the UI says "what the source says now" reads like a quote and is not
+  one. None makes the UI say the span is not in the shortened copy, and the
+  archived original is restorable.
+* `App.jsx`'s `jumpTo` no longer emphasises span coordinates for a stale
+  highlight. This half was wrong for **edits too** — the card showed the
+  side-by-side correctly while the timeline underneath it highlighted the old
+  offsets in the new text. Scrolling to the entry and marking nothing is the
+  honest behaviour; pointing confidently at the wrong words is worse than
+  pointing at the note.
+
+**Stale does not mean lost.** `anchored_text` still resolves the highlighted
+words against the version snapshot compression does not touch, and
+`decay.archived_original` still returns the full note byte for byte.
+`test_restoring_an_entry_makes_its_highlights_current_again` asserts the round
+trip reaches provenance as well as content — restoring a note makes its
+highlights current again.
+
+**The verdict this changes.** `SCENARIO_COVERAGE.md` recorded scenario 16 as
+SURVIVES on the strength of the edit path. That was true of the edit path and
+untrue of the build, because decay could reach the same content by another
+route. It is corrected there.
+
+### D-103 · What the final pass covered, and what it did not
+
+Four defects, all live against a suite of 847 backend and 67 frontend tests that
+passed while every one of them reproduced. That is the point worth recording:
+none of them were found by making the tests stricter. They were found by running
+the system on clinical text that nobody had run it on — a three-drug
+reconciliation list, a patient editing her own note, a 400-day-old entry going
+through decay.
+
+**The common shape.** Three of the four live in a seam between two modules that
+are each correct alone: two constants sharing a name, two extractors sharing a
+regex but not a rule, and a lifecycle transition that bypasses a mechanism
+watching a different variable. D-098 said the same thing about a documentation
+cross-reference. The build's per-module reasoning is dense and mostly right; its
+weak points are the joins, and the joins are what integration-shaped probing
+finds and unit-shaped testing does not.
+
+**What was checked and found sound**, so the absence of a finding is a result
+rather than a gap in the sweep: the RBAC dependency and `AccessScope` (there is
+no unscoped query path to reach for, and `Version` — the one model without a
+`clinic_id`— is only ever reached through a clinic-scoped `Entry`); the
+redaction chokepoint and its residual tripwire; `llm_client`'s fail-closed
+ordering and its outage translation; version/revert semantics; the highlight
+staleness machinery on the edit path; enrolment's clinic scoping and its
+rollback on username clash.
+
+**What was not covered.** The voice-capture and ASR pipeline, the concurrency
+paths beyond reading their existing tests, and the learning loop past
+`_accumulate` were read but not probed with the same adversarial input that
+found the four above. On present evidence — three of four defects in module
+seams — the untested seams there are the likeliest place a fifth is sitting.
+Stated rather than left as an implied clean bill.
+
+**One thing noticed and deliberately not fixed.** `_now()` and `_aware()` are
+re-implemented in six modules instead of importing `core/timeutil`. Nothing is
+currently wrong with any copy, and D-061 exists because a timestamp
+inconsistency of exactly this kind shipped once. Consolidating them touches
+scoring, learning, decay, glance, highlights and scribe at the end of an audit
+pass, which trades a real regression risk for a hypothetical one. Logged here as
+known duplication rather than done badly under time pressure.
