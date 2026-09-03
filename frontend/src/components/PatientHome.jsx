@@ -16,11 +16,41 @@
  * being reinvented in the client.
  */
 
+import { useState } from 'react'
 import { shortDate } from '../lib/format'
 import { EmptyState } from './Primitives'
 
-export default function PatientHome({ care, timing, onRunSession, sessionBusy, voiceCapture }) {
+export default function PatientHome({
+  care,
+  timing,
+  onRunSession,
+  sessionBusy,
+  voiceCapture,
+  onAddNote,
+}) {
   const labels = care.labels || {}
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [sendFailed, setSendFailed] = useState(false)
+
+  async function submitNote() {
+    if (!draft.trim() || saving) return
+    setSaving(true)
+    setSendFailed(false)
+    try {
+      await onAddNote(draft.trim())
+      setDraft('')
+    } catch {
+      // She gets told, and her words stay in the box. Without this the promise
+      // rejected unhandled, the button re-enabled, and the only visible change
+      // was that nothing happened — which reads as "sent". The one reader here
+      // with no second chance to remember this before her appointment is the
+      // worst person to leave guessing.
+      setSendFailed(true)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -126,8 +156,44 @@ export default function PatientHome({ care, timing, onRunSession, sessionBusy, v
           Anything you share before an appointment goes to your care team, so you do not
           have to remember it in the room.
         </p>
+        {/* This section promised that anything she shares reaches her care team,
+            and for a long time there was nothing here to share it with — the
+            notes rendered, and no screen could create one. The patient half of
+            "patient-contributed insights" was read-only. See DECISIONS.md
+            D-106. */}
+        {onAddNote && (
+          <div className="mt-3">
+            <label
+              htmlFor="patient-note-draft"
+              className="block text-sm font-medium text-slate-700"
+            >
+              Write something for your care team
+            </label>
+            <textarea
+              id="patient-note-draft"
+              className="mt-1 w-full rounded-lg border border-slate-300 p-3 text-[15px]"
+              rows={3}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="For example: the evening tablet upsets my stomach."
+            />
+            <button
+              onClick={submitNote}
+              disabled={saving || !draft.trim()}
+              className="mt-2 rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-40"
+            >
+              {saving ? 'Saving…' : 'Send to my care team'}
+            </button>
+            {sendFailed && (
+              <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                That did not send. Your words are still here — try again, or
+                bring this to your appointment.
+              </p>
+            )}
+          </div>
+        )}
         {care.your_notes.length > 0 && (
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-3 space-y-2">
             {care.your_notes.map((note) => (
               <li key={note.id} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
                 <div className="flex items-baseline justify-between gap-2">

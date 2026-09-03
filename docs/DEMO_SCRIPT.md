@@ -344,45 +344,62 @@ then right.
 
 ---
 
-## 9 — What reaches the patient (scenarios 12, 11) · ~90s
+## 9 — What reaches the patient (scenarios 12, 11) · ~110s
 
-First, a note that must go through untouched: `Continue metformin 1g BD,
-amlodipine 5mg OD, atorvastatin 20mg ON.` It saves without a prompt, and the
-Glance View shows no contradiction.
+**The entry type is the whole point of this segment.** In the left window as
+`clinician_a` the composer offers three: *clinician section*, *instruction for
+the patient*, *summary for the patient*. Everything below depends on which one
+is selected — pick the wrong one and nothing happens, which is itself the
+demonstration.
+
+First, as a **clinician section**, type `Take metformin 5000mg daily.` It saves.
+No prompt.
+
+Now switch to **instruction for the patient** and type the same sentence. An
+amber line appears above the box before you type — *she reads this herself* —
+and the save is refused with a confirmation dialog: *5000mg of metformin is far
+outside the usual adult range (250–1000 mg).*
+
+> "Same words, same author, same minute. The internal note goes through and the
+> patient-facing one stops, because those are different severity classes. You
+> can audit a wrong number in a clinician's own section. You cannot audit one
+> that is already on her phone. The gate is not a spell-checker for the record;
+> it is a gate on the door to her."
+
+> "And it confirms rather than blocks. A hard block on a real clinical range
+> teaches people to route around the check, so the override is recorded instead."
+
+Still on **instruction for the patient**, type `Continue metformin 1g BD,
+amlodipine 5mg OD, atorvastatin 20mg ON.` It saves clean.
 
 > "That ordinary line used to do two wrong things at once. The contradiction
 > detector gave the first dose in the sentence to every drug in it, so it
 > reported amlodipine at one gram — a dose that does not exist for that drug —
 > as a high-severity disagreement against a later note that agreed. And the
-> dosage gate's window ran past the next drug name, so 'metformin and
-> amlodipine 5mg' read as metformin 5mg and blocked the write. A safety check
-> that is confidently wrong about an easy case teaches people the check means
-> nothing, which disarms it for the one that matters."
+> gate's window ran past the next drug name, so 'metformin and amlodipine 5mg'
+> read as metformin 5mg and blocked the write. A safety check that is
+> confidently wrong about an easy case teaches people the check means nothing."
 
-Now attempt a patient-facing note containing `metformin 5000mg`.
+Switch to the `patient_a` window and reload. The instruction is there in plain
+language. Now go back and **edit** it in the clinician window, then reload hers.
 
-> "Patient-facing content is a higher severity class — you cannot audit
-> something already on someone's phone. An implausible dose gates the write, and
-> the override is recorded rather than blocked outright, because a hard block
-> teaches people to route around the check."
-
-The `patient_a` window (Amira's own view, not Siti's) → correction banner.
+> "Scenario 12. She is told it changed, at the top of her page, above everything
+> else — because if she was following the earlier dose, that is the only thing on
+> the screen that matters."
 
 > "Scenario 11 asks why the link never arrives. Ours never sends — there is no
 > email, SMS or push, and `dispatched` is deliberately not modelled rather than
 > faked. We report reach honestly: unread, read, corrected."
 
-Still in the patient tab, add a patient note, then edit it. **Nothing happens** —
-no banner on her page, and no row appears on the clinician's delivery panel.
-(The unread count may fall, because opening the portal marks the *clinician's*
-instructions read. That is the panel working.)
+Finally, in her own window, write in **Write something for your care team** —
+`The evening tablet upsets my stomach.` — and send it. It appears under her
+notes, and in the clinician's timeline.
 
-> "This banner is the loudest thing we say to a patient, and it means the clinic
-> changed something you already acted on — possibly a dose. Until our last audit
-> it also fired when she edited her own note, because two modules had a constant
-> with the same name and different contents. She would have been told to stop
-> following her own words. The one reader in this system with no way to check a
-> warning against anything was the one getting a false one."
+> "That is the patient half of the record, and she writes it herself. Then edit
+> it, and watch what does *not* happen: no correction banner. Until our last
+> audit it fired here too, because two modules had a constant with the same name
+> and different contents, and she would have been told to stop following her own
+> words."
 
 ---
 

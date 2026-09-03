@@ -28,10 +28,36 @@ import VoiceCapture from './components/VoiceCapture'
 import { Button, Chip } from './components/Primitives'
 import { roleLabel } from './lib/format'
 
-const WRITABLE_TYPE = {
-  staff: { type: 'staff_note', label: 'staff note' },
-  clinician: { type: 'clinician_section', label: 'clinician section' },
-  patient: { type: 'patient_note', label: 'note for your care team' },
+/**
+ * What each role may compose, in the order the picker offers it.
+ *
+ * This mirrors `security/policy.WRITABLE_TYPES` and is not the enforcement —
+ * the server rejects anything a role may not write, whatever this list says.
+ *
+ * A clinician gets three, not one. The single-type version could only ever
+ * produce `clinician_section`, which meant nothing written *for* the patient
+ * could be authored through the interface at all: patient instructions existed
+ * only in the seed, the patient view had nothing new to show, and the dosage
+ * gate — which by design fires only on patient-facing types — was unreachable.
+ * Three product surfaces were dark because a constant had one entry.
+ * See DECISIONS.md D-106.
+ */
+export const WRITABLE_TYPES = {
+  staff: [{ type: 'staff_note', label: 'staff note' }],
+  clinician: [
+    { type: 'clinician_section', label: 'clinician section' },
+    {
+      type: 'patient_instruction',
+      label: 'instruction for the patient',
+      patientFacing: true,
+    },
+    {
+      type: 'patient_summary',
+      label: 'summary for the patient',
+      patientFacing: true,
+    },
+  ],
+  patient: [{ type: 'patient_note', label: 'note for your care team' }],
 }
 
 const SCRIBE_LABEL = {
@@ -108,12 +134,15 @@ function Workspace({ session, onSignOut }) {
   const [emphasis, setEmphasis] = useState(null)
   const [processing, setProcessing] = useState(null)
   const [draft, setDraft] = useState('')
+  const [draftType, setDraftType] = useState(null)
   const [error, setError] = useState(null)
   const entryRefs = useRef({})
 
   const isPatient = session.role === 'patient'
   const isClinical = ['staff', 'clinician', 'admin'].includes(session.role)
-  const writable = WRITABLE_TYPE[session.role]
+  const writableTypes = WRITABLE_TYPES[session.role] || []
+  const writable =
+    writableTypes.find((entry) => entry.type === draftType) || writableTypes[0]
 
   useEffect(() => {
     Api.patients()
@@ -321,6 +350,13 @@ function Workspace({ session, onSignOut }) {
               timing={timing}
               sessionBusy={Boolean(processing)}
               onRunSession={() => runScribe('ai_patient_session')}
+              onAddNote={async (text) => {
+                await Api.createEntry(selected, {
+                  type: 'patient_note',
+                  content: text,
+                })
+                await load(selected)
+              }}
               voiceCapture={
                 <VoiceCapture
                   patientId={selected}
@@ -363,6 +399,32 @@ function Workspace({ session, onSignOut }) {
                     <label className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
                       Add a {writable.label}
                     </label>
+                    {writableTypes.length > 1 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {writableTypes.map((option) => (
+                          <Button
+                            key={option.type}
+                            variant={
+                              option.type === writable.type ? 'primary' : 'quiet'
+                            }
+                            onClick={() => setDraftType(option.type)}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {writable.patientFacing && (
+                      // Not decoration. A hallucinated line in an internal note
+                      // gets audited; the same line on a patient's phone does
+                      // not, so the author should know which of the two they
+                      // are writing before they start typing (D-067).
+                      <p className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                        She reads this herself. Dosages are checked against the
+                        reference before it saves, and any later edit tells her it
+                        changed.
+                      </p>
+                    )}
                     <textarea
                       className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
                       rows={2}

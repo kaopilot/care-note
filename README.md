@@ -28,7 +28,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
 [`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (548 test functions, 872 cases) ·
-`cd frontend && npm test` (78 component tests).
+`cd frontend && npm test` (85 component tests).
 
 ---
 
@@ -144,7 +144,7 @@ errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
 548 backend test functions — 872 collected cases once parametrisation is
-expanded — plus 78 frontend component tests. All passing, no API key or network
+expanded — plus 85 frontend component tests. All passing, no API key or network
 required. Roughly 60 seconds.
 
 The two numbers differ because 44 functions are parametrised, and the honest one
@@ -833,6 +833,11 @@ README exists not to do.
   (D-102). The full original is restorable, but until someone restores it there
   is no live text to put side by side — an honest gap rather than a fabricated
   comparison.
+- **Nothing tests that a route is reachable by a person.** Three defects in the
+  final pass were features the API supported and no screen exposed — a
+  registration form, patient-facing entry types, a patient note box (D-104,
+  D-106). The suite tests the API and the components; the gap between "the
+  route works" and "a user can get to the route" is covered by neither.
 - **The residual-PHI tripwire shares its patterns with the redactor.** So it
   cannot catch a format the redactor does not describe — it reported a
   Malaysian mobile as clean because neither knew the shape (D-105, and D-095

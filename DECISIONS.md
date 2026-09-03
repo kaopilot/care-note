@@ -3439,3 +3439,51 @@ redactor. A genuinely independent check — a different implementation, ideally 
 different author's — is the correct answer and is not a change to make at the
 end of an audit pass. Recorded here as the second occurrence, so the next person
 weighing it has two data points rather than one.
+
+### D-106 · The composer offered one entry type, and three surfaces went dark
+
+Reported by someone following the demo script: they typed a note containing
+`metformin 5000mg`, got no dosage prompt, and could find no way to add a patient
+note. Both were the interface, not the reader.
+
+`WRITABLE_TYPE` in `App.jsx` mapped each role to exactly **one** entry type. A
+clinician got `clinician_section`. `security/policy.WRITABLE_TYPES` has granted
+them `PATIENT_INSTRUCTION` and `PATIENT_SUMMARY` since Phase 0, the API accepts
+both, and tests cover both — no screen offered either.
+
+**Three things were unreachable because of one constant.** Nothing written *for*
+the patient could be authored through the product: patient instructions existed
+only in the seed, so her view had nothing new in it and could not have anything
+new put in it. The dosage gate fires by design only on patient-facing types
+(D-067), so the entire mechanism was unreachable from the interface — the
+confirmation dialog, its component and its tests were all live code that a user
+could not arrive at. And `delivery`'s unread/read/corrected reporting had nothing
+to report on beyond seeded rows.
+
+**The patient view had no composer at all.** `PatientHome` rendered
+`your_notes`, under a heading promising *anything you share before an
+appointment goes to your care team* — and there was no way to share anything.
+The patient half of "patient-contributed insights", which is in the first line
+of the brief, was read-only.
+
+Both are now built: a type picker for clinicians, with an amber line on the
+patient-facing options saying *she reads this herself*, and a note box in the
+patient view. Neither is enforcement. The server refuses anything a role may not
+write whatever the picker shows, and a test asserts the picker cannot offer a
+button that always fails.
+
+**Writing the tests found a third defect.** The patient composer's `submitNote`
+had `try`/`finally` and no `catch`, so a failed save rejected unhandled: the
+button re-enabled, her words stayed in the box, and nothing else changed. To the
+patient that reads as *sent*. She is the one participant with no second chance
+to remember the thing before her appointment and no provenance rail to check
+against, so a silent failure lands on her worse than on anyone else in the
+system. She is now told, and her words are kept.
+
+**Why this kept happening.** Three defects in this pass — this one, the missing
+front-desk screen (D-104), and the unredacted Malaysian mobile (D-105) — were
+found by trying to *use* the product, and all three were invisible to a suite
+that tests the API. We verified segment 9 during the last pass and verified it
+with `curl`, which is exactly the mistake: the backend was right every time. The
+gap between "the route works" and "a person can get to the route" is not covered
+by anything we run.
