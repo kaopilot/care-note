@@ -9,7 +9,7 @@ and server-enforced RBAC.
 > **Synthetic data only.** This is a prototype. It has never been connected to a
 > real medical record and must not be.
 
-**Build status: complete (Phases 0–8).** Longitudinal timeline, AI scribe
+**Build status:** A working prototype Longitudinal timeline, AI scribe
 pipeline, Glance View with provenance click-through, threaded collaboration,
 revision history with revert, conflict handling, contradiction detection,
 adaptive importance, data decay, and ambient voice capture. See
@@ -26,7 +26,6 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
-[`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
 [`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (548 test functions, 872 cases) ·
 `cd frontend && npm test` (85 component tests).
 
@@ -164,9 +163,9 @@ pytest tests/test_voice_capture.py -v              # BONUS — ambient consult c
 
 **Scenario coverage.** [`docs/SCENARIO_COVERAGE.md`](docs/SCENARIO_COVERAGE.md)
 maps all sixteen clinic scenarios and the twelve-capability list to the tests
-that cover them, each with a verdict. Current tally: **11 SURVIVES · 4 PARTIAL ·
-1 DOES NOT** on the scenarios, **4 · 7 · 1** on the capabilities — revised down
-from 6 · 5 · 1 by a post-submission audit (`DECISIONS.md` D-091).
+that cover them, each with a verdict, and gives a detailed account of every
+scenario. Tally: **9 SURVIVES · 6 PARTIAL · 1 DOES NOT** on the scenarios,
+**4 SURVIVES · 7 PARTIAL · 1 DOES NOT** on the capabilities.
 
 The files from the clinic-scenario review:
 
@@ -205,9 +204,9 @@ pytest tests/ -v -k properties     # all five files, ~15 seconds
 ```
 
 Five files whose names end in `_properties.py`. They exist because of a pattern
-that only became visible after two audit rounds: **seven defects were found in
-this build, and every one was invisible to its own tests for the same reason —
-each test used the shape of the case its author had in mind.**
+in the defects this build turned up: **every one was invisible to its own tests
+for the same reason — each test used the shape of the case its author had in
+mind.**
 
 Cross-entry contradiction tests used two entries, so a one-entry transcript was
 invisible. Abstention tests used romanised Latin script, so Chinese never fired.
@@ -686,7 +685,7 @@ an undisclosed gap has reason to wonder what else was not mentioned.
 
 ### Phase 9 — changes made after the clinic-scenario review
 
-**Scenario verdicts: 11 SURVIVES · 4 PARTIAL · 1 DOES NOT** (was 6 · 6 · 4).
+**Scenario verdicts: 9 SURVIVES · 6 PARTIAL · 1 DOES NOT** (was 6 · 6 · 4).
 **Capabilities: 6 · 5 · 1.** Per-row detail and the tests behind each verdict:
 [`docs/SCENARIO_COVERAGE.md`](docs/SCENARIO_COVERAGE.md). The written response is
 [`docs/BRIEF_ROUND2.md`](docs/BRIEF_ROUND2.md).
@@ -852,11 +851,11 @@ README exists not to do.
   headers is the same argument as D-083 — but it also means no back button, no
   bookmarking, and no shareable link to a specific entry. The **Front desk**
   lookup (D-104) covers the one case that needed it.
-- **Module joins are less examined than modules.** Three of the four defects in
-  the final audit pass sat between two pieces of correct code — two constants
-  sharing a name, two extractors sharing a regex but not a rule, and a lifecycle
-  transition bypassing a mechanism watching a different variable (D-103). Every
-  module here documents its own behaviour at length; none documents what it
+- **Module joins are less examined than modules.** Most of the defects found by
+  driving the running system sat between two pieces of correct code — two
+  constants sharing a name, two extractors sharing a regex but not a rule, and a
+  retention path bypassing a check that watched a different variable (D-103).
+  Every module here documents its own behaviour at length; none documents what it
   assumes about its neighbour.
 - **Clinic provisioning is still `init_db.py`.** Deliberate — tenant creation is
   an operator path, not an in-app button. But per-clinic configuration is a real

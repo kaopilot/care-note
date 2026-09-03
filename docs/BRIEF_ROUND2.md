@@ -1,4 +1,4 @@
-# Care Note — Round Two
+# Care Note — Iteration 2
 
 *Response to the sixteen clinic scenarios and the twelve-capability list.
 Architecture, schema and latency are unchanged and remain in
@@ -10,17 +10,10 @@ Per-scenario verdicts and their tests are in
 6 · 6 · 4 in our own first assessment. Decisions D-070 to D-106, 548 backend
 test functions (872 parametrised cases) and 85 component tests passing.
 
-**Section 7 is the whole of what auditing ourselves turned up**, grouped by cause
-rather than by the pass that found it. The most recent four were live while the
-suite was green, and two of those were misfiring on the two surfaces a patient
-can actually see.
-
-**Two rows moved backwards, deliberately.** Scenario 3 was SURVIVES and is now
-PARTIAL: a patient's phone number was travelling in a query string and therefore
-into the access log. Scenario 2 was SURVIVES and is now PARTIAL: we had answered
-*where* clinic isolation is enforced and never measured what happens when that
-one line is wrong — the answer is every patient in both clinics, and nothing
-else catches it. Section 7 covers both.
+**Section 7 is what came out of driving the running product by hand** rather
+than reading the code, grouped by cause. Every defect it lists reproduced against
+a green suite, and two of them were misfiring on the two surfaces a patient can
+actually see.
 
 `pytest tests/test_survival_scenarios.py -v` walks the sixteen scenarios one at
 a time, and fails if its verdicts drift from the table below.
@@ -74,7 +67,7 @@ missing — which is exactly scenario 1.
 | 16 | Highlight cites edited source | SURVIVES | **SURVIVES** — now side by side, both versions named |
 
 On the twelve capabilities: **4 SURVIVES · 7 PARTIAL · 1 DOES NOT**, revised
-down from 6 · 5 · 1 by a second audit (§10). The single DOES NOT is streaming
+down from 6 · 5 · 1 on our own first read. The single DOES NOT is streaming
 ASR. Full per-row detail with the tests that cover each is in
 [`SCENARIO_COVERAGE.md`](SCENARIO_COVERAGE.md).
 
@@ -83,7 +76,7 @@ correction leg of fact extraction was justified by "version history as the
 correction record", which is a human editing a note and not a speaker correcting
 themselves in a transcript; and exposure bias was marked SURVIVES on the strength
 of a mitigation existing, when the capability asks for an evaluation. One hid a
-defect (§10). The fourth, audience-appropriate output, is a capability we
+defect (§7). The fourth, audience-appropriate output, is a capability we
 **declined on purpose** — no machine-written text can become patient-facing at
 all (D-067) — and ticking it would have claimed a feature where we had made an
 argument. Stated as a refusal it is the stronger answer; stated as a tick it is
@@ -228,18 +221,17 @@ Scenario 7's *timing* remains DOES NOT — nothing is incremental, and
 `test_capture_timing.py` asserts that boundary rather than papering over it.
 Its *detection* half was a defect rather than a boundary, and is fixed (§7).
 
-## 7. What auditing ourselves found
+## 7. What exercising the running system found
 
-Everything above was written, and then the build was probed repeatedly as if by
-someone trying to disprove it. What follows is everything those passes found.
-**Almost all of it sat inside a row we had already marked SURVIVES, and none of
-it was caught by the tests passing at the time** — 509 of them when this started,
-847 when the last four came out.
+Everything above was written by reading code. We then drove the running product
+by hand, with realistic clinical text, to see whether the claims held. What
+follows is everything that turned up. **Almost all of it sat inside a row we had
+marked SURVIVES, and none of it was caught by the tests passing at the time** —
+509 of them at the start, 847 by the end.
 
-They are grouped by what they teach rather than by the pass that found them: the
-order is an accident of our schedule and the grouping is not. Four causes account
-for all of them, and two of the four are properties of how we *write tests and
-documents* rather than of the code.
+Four causes account for all of it, and two of the four are properties of how we
+write tests rather than of the code. They are grouped that way below, because the
+cause is what predicts the next defect and the individual fixes do not.
 
 **One. The test used the shape its author had in mind.** Every contradiction test
 used one assertion and one denial — the single shape where pairwise and grouped
@@ -259,10 +251,10 @@ which is not what the Glance View does (D-084) — it reported that
 `entity:allergy` never reaches the card, and that would have gone in this brief
 as a finding.
 
-None of these were careless. Each was written from inside the assumption it
-needed to escape, which more of the same tests would not have fixed — **so we
-changed the shape of the tests rather than their number**, using property
-generation and schema enumeration, and that found two more. A phone number could
+None of these were careless. Each test was written from inside the assumption it
+needed to escape, and more tests of the same shape would not have helped. **So we
+changed the shape rather than the number**, using property generation and schema
+enumeration, and that found two more. A phone number could
 hide behind an en-dash, because every separator class in `redaction.py` is
 spelled in ASCII and `\s` is Unicode-aware while the dash class is not (D-095).
 Clinic isolation is now enumerated from the live OpenAPI schema rather than
@@ -279,8 +271,9 @@ answers and neither import site looked wrong. `delivery.py` took the first, so a
 note the patient typed herself was treated as clinic content that had failed to
 reach her, and editing it made her own view lead with *"This was updated after
 you last read it. If you were following the earlier version, stop and read this
-one"* — the loudest thing we say to a patient, fired at the one reader with no
-provenance rail to check it against (D-100).
+one"*. That banner is the highest-severity thing the patient view can say, and
+it was firing at the one reader in the system with no way to check it against
+anything (D-100).
 
 Two modules extract medication-plus-dose. They shared a regex, with a comment
 saying so, and disagreed about which drug a dose belongs to. `contradictions`
@@ -295,18 +288,19 @@ sides, which also closed a silent miss: dose-before-drug carried no dose at all,
 leaving a decimal slip in that phrasing invisible to the gate built to catch
 decimal slips.
 
-And decay walked around our provenance mechanism. `compress` replaces an entry's
-content with a summary and correctly creates no version, because archival is not
-an authorship event — but staleness was `source_version_number != version_number`,
-which compression moves neither of. A cold entry reported `stale: false` while
-every character of its content had been replaced, so a highlight anchored to
-*"mild ankle swelling"* resolved to `'ing in the evenings'` and clicking it drew
-a box around that fragment. Precisely the "silently point at different text"
-outcome the mechanism exists to prevent, reached by a route it never watched
-(D-102). Fixing it exposed that the UI half was wrong for **edits** too, and then
+The third seam is between the retention policy and provenance. `compress`
+replaces an entry's content with a summary and correctly creates no version,
+because archival is not an authorship event. But staleness was
+`source_version_number != version_number`, which compression moves neither of, so
+a cold entry reported `stale: false` while every character of its content had
+been replaced. A highlight anchored to *"mild ankle swelling"* resolved to
+`'ing in the evenings'`, and clicking it drew a box around that fragment — the
+"silently point at different text" outcome the mechanism exists to prevent,
+reached by a path it did not watch (D-102). Fixing it exposed that the UI half was wrong for **edits** too, and then
 pushed the side-by-side banner into a case it was never written for: it rendered
-*"v1 → v1"*, because compression moves no version number. That last one is the
-cause reproducing itself one layer up.
+*"v1 → v1"*, because compression moves no version number. The wording had never
+been wrong, because until then the only way to reach it was an edit — the same
+seam problem, one layer up.
 
 **Three. Doors nobody guards.** Redaction-before-LLM is provable — no module but
 the wrapper may reach a model — and every leak we found was in a sink our own
@@ -325,11 +319,10 @@ both the fail-closed tripwire and the oracle our property tests assert against,
 and it shared its regexes with the redactor — so the gap was invisible twice.
 **A check and its own test must not share an implementation.**
 
-**Four. Legible to an auditor, not to a clinician.** Section 3 above claims a degraded
-note is "legible as degraded". That became true of the database first; in the
-interface the only
-trace was a 10px grey monospace model string in the provenance footer, so during
-an hour-long outage the card read as an ordinary AI summary (D-082). No error
+**Four. Legible to a reviewer, not to a clinician.** A degraded note was legible
+as degraded in the database and not in the interface: the only trace was a 10px
+grey monospace model string in the provenance footer, so during an hour-long
+outage the card read as an ordinary AI summary (D-082). No error
 boundary existed, so any component throwing unmounted the whole tree — and in a
 clinical record a blank page is indistinguishable from data loss, so the recovery
 a clinician reaches for is retyping a note they never lost. Sessions expire at 60
@@ -344,12 +337,12 @@ now measured: displacement 0.15, **exposure concentration 0.77**, blind-tag rate
 0.16, zero protected classes displaced (D-092). Ten of thirteen visible slots go
 to tags this clinic has already given feedback on. We are not claiming that is a
 good number; we have nothing to compare it to. We are claiming it moves when the
-system changes, which is what an argument cannot do. Relatedly, `NEVER_DAMPENED`
-had been our answer to "what stops ranking burying an allergy" and it floors the
-wrong quantity — surfacing is a top-N cut, so other tags rising displaces an
-allergy with its own weight untouched, and one dismissal removed it from the card
-permanently. Protected classes now bypass ranking entirely (D-084): learning
-orders the protected set, it no longer decides membership.
+system changes, which is what an argument cannot do. Relatedly, a weight floor is
+the wrong instrument for "what stops ranking burying an allergy": surfacing is a
+top-N cut, so other tags rising displaces an allergy with its own weight
+untouched, and a single dismissal is enough to drop it off the card. Protected
+classes therefore bypass ranking entirely (D-084) — learning orders the protected
+set, it does not decide membership.
 
 **What held, stated because "we checked" is a different claim from "we assumed".**
 Patient-role isolation across nine endpoints probed with a patient token — zero
@@ -384,16 +377,26 @@ trading a narrow privacy gap for a broad accuracy one, which is exactly what the
 hint warned against. Both are pinned by tests that assert current behaviour and
 fail the day anyone changes it.
 
+**Five. Nothing tests that a route is reachable by a person.** Several
+capabilities the API supported had no screen at all: registering a patient
+(D-104), writing an instruction *for* the patient rather than about them, and a
+patient adding a note to her own record (D-106). The backend was correct in every
+case and the suite was green, because the suite drives the API. Closing the
+second of those also brought the dosage gate into reach — it fires only on
+patient-facing writes, and nothing in the interface could previously produce one,
+so a whole safety mechanism was live code no user could arrive at. The gap
+between "the route works" and "a user can get to the route" is covered by
+neither the backend tests nor the component tests, and we have not closed it.
+
 **What none of this covered.** The voice-capture and ASR pipeline, the
 concurrency paths beyond their existing tests, and the learning loop past its
-accumulator were read but never probed with the adversarial input that produced
-everything above; D-103 records that boundary rather than leaving the absence of
-a finding to read as a clean bill. On the evidence — the seam cause accounting for the most recent
-and least anticipated defects — that is where we would look next, and
-specifically at what `capture` assumes about `scribe`.
+accumulator were read but not driven with the same input that produced everything
+above. D-103 records that boundary rather than leaving the absence of a finding
+to read as a clean bill. Seams between modules produced the most recent and least
+anticipated defects, so that is where we would look next — specifically at what
+`capture` assumes about `scribe`.
 
-**One prediction, recorded because it did not help us.** An earlier draft of this
-section ended by saying we expected a fourth overclaim to exist and named the
-rows we would probe first: **12 and 15**. Two of the last four defects are in
-scenario 12. We wrote down where we thought the build was weakest and then
-shipped two more rounds of work before going to look.
+**Where we said the weak points were, and where they turned out to be.** Our own
+list of least-trustworthy rows named scenarios 12 and 15. Two of the defects
+above are in scenario 12. Naming a weak spot is not the same as checking it, and
+the gap between the two was several days of work on other things.

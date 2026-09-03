@@ -3168,7 +3168,7 @@ imports from `policy`, and `delivery.py`'s docstring states the scope in words
 rather than leaving it to the import line.
 
 **What this does not fix.** Nothing stops a future module importing the right
-constant and meaning the wrong thing by it. `test_audit_defects.py` pins the
+constant and meaning the wrong thing by it. `test_review_defects.py` pins the
 behaviour — a patient note produces no delivery row and no correction banner —
 which is the part that mechanises. The naming discipline is not testable and is
 now at least written down.

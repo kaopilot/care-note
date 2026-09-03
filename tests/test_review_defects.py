@@ -1,10 +1,10 @@
-"""Regressions for the four defects found in the final audit pass.
+"""Regressions for defects found by exercising the running system.
 
-All four were live against a green suite — 847 backend tests and 67 frontend
-tests passed while every one of these was reproducible. They are grouped here
-rather than scattered into the files that own each subject so that a reviewer
-can run one command and see the pass's findings; the modules themselves carry
-the reasoning inline and cite the decision records.
+Every one of these reproduced against a fully green suite, which is the point
+worth recording: none was found by making the existing tests stricter. They are
+grouped here rather than scattered into the files that own each subject so a
+reviewer can run one command and see them all; the modules themselves carry the
+reasoning inline and cite the decision records.
 
   1. `delivery` imported `PATIENT_FACING_TYPES` from `core.enums` (three types,
      including `patient_note`) while `dosage_gate` imported a constant of the
