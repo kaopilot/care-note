@@ -37,8 +37,11 @@ record:
 ./run_tests.sh tests/test_survival_scenarios.py -q      # expect: 5 passed
 ```
 
-Two browser windows side by side at `localhost:5173` — **left `clinician_a`,
-right `staff_a`**, password `carenote-demo`.
+**Three browser windows** at `localhost:5173`, password `carenote-demo`
+throughout — **left `clinician_a`**, **right `staff_a`**, and a third as
+**`patient_a`** (Amira's own view) that segment 9 needs. Keep the third signed in
+as `patient_a`: segment 2 logs in as a newly registered patient, and that goes in
+a separate private window so this one survives.
 
 Patient **Amira Rahman** throughout. On a fresh `--reset` her card leads with a
 penicillin allergy highlight marked **⚠ Always shown** — segment 6 depends on
@@ -86,8 +89,10 @@ She appears in the patient list immediately.
 Submit the same phone number again → *already registered to a patient in this
 clinic*, not a second account on one number.
 
-Then log in as her in a private window, username `0198887777`, password the
-passcode. The patient view opens.
+Then log in as her in a **private** window (not the `patient_a` one), username
+`0198887777`, password the passcode. Her patient view opens — empty, because she
+has no history yet, which is the timeline's defined empty state rather than a
+blank panel.
 
 Then, terminal:
 
@@ -268,9 +273,9 @@ shortened copy, with the banner *"Every sentence shown was written by the author
 > longer describe. The silently-wrong case, reached by a route the mechanism
 > never watched."
 
-This one's highlight is not on the Glance View — a 400-day-old note does not
-rank onto a card capped at seven — so show the fix in the terminal rather than
-implying it is on screen:
+This one's highlight is not on the Glance View — the card is six ranked slots
+plus any protected class that bypasses ranking, and a 400-day-old note wins
+neither — so show the fix in the terminal rather than implying it is on screen:
 
 ```bash
 ./run_tests.sh tests/test_audit_defects.py -q      # expect: 16 passed
@@ -327,7 +332,7 @@ Now attempt a patient-facing note containing `metformin 5000mg`.
 > the override is recorded rather than blocked outright, because a hard block
 > teaches people to route around the check."
 
-Patient tab → correction banner.
+The `patient_a` window (Amira's own view, not Siti's) → correction banner.
 
 > "Scenario 11 asks why the link never arrives. Ours never sends — there is no
 > email, SMS or push, and `dispatched` is deliberately not modelled rather than
