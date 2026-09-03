@@ -3341,3 +3341,52 @@ inconsistency of exactly this kind shipped once. Consolidating them touches
 scoring, learning, decay, glance, highlights and scribe at the end of an audit
 pass, which trades a real regression risk for a hypothetical one. Logged here as
 known duplication rather than done badly under time pressure.
+
+### D-104 · A front-desk screen, and why the patient id stays out of the URL
+
+Two backend routes had no user interface: `POST /patients` (enrolment) and
+`GET /patients/{id}` (look one up). Both were reachable and tested; neither was
+reachable by a person. That was discovered by trying to follow our own demo
+script, which instructed the presenter to click an **Add patient** button that
+did not exist and to paste another clinic's patient id into a URL — in an
+application that has no router at all, so there is no URL to paste into.
+
+The honest interim fix was to demonstrate both with `curl`, and that is a fair
+demonstration of a server-side check. It is a poor demonstration of a product:
+the two controls a reviewer most wants to watch refuse something were the two
+they could not see work. So there is now a **Front desk** panel, visible to
+staff, clinician and admin, holding a registration form and a lookup field.
+
+**The registration form carries one thing the API cannot.** The one-time
+passcode is returned exactly once and stored only as a hash. A staff member who
+assumes it can be retrieved later will not write it down, and the patient is
+locked out — so the panel says *shown once, cannot be retrieved* next to the
+number rather than leaving that to be inferred. It also names the case where
+`reachable` is false: no contact identifier means nothing can be sent to her,
+which the clinician needs to know before assuming she has been told anything.
+
+**The lookup deliberately does not read the URL.** Adding `?patient=<id>` would
+have been one `useEffect` and would have made the original demo instruction
+literally true. It would also put patient ids in browser history, in referrer
+headers, and on the screen of every shared consult-room laptop. D-083 is the
+record of a phone number reaching the ASGI access log because we put it in a
+query string and only noticed afterwards; re-introducing ids to a URL for demo
+convenience is that lesson unlearned, in a weaker form we would find harder to
+argue against later. The id goes in a form field and comes back out in a request
+path, which is where `test_url_surface.py`'s allowlist already permits an opaque
+id to appear. `PatientAdmin.test.jsx` pins it — the lookup must leave
+`window.location` untouched.
+
+**The copy for a refusal is a security decision, not a wording one.** A
+wrong-clinic id and a nonsensical id both return 404 with the same body, and the
+panel says so in as many words: *the same answer is given for an id that does
+not exist and one that belongs to another clinic.* Distinguishing them in the
+interface would confirm to a clinician in Clinic A that a patient exists in
+Clinic B, which is exactly what the 404 is there to avoid. A test renders both
+cases and asserts the rendered text is identical, rather than asserting the
+wrong-clinic wording alone and leaving the divergence untested.
+
+**What this does not change.** The screen is not the access boundary and is not
+claimed as one. `AccessScope.query` still is, still singularly (D-085), and
+scenario 2 remains PARTIAL for that reason — the panel makes the refusal
+watchable, and the mutation test is still what proves it happens server-side.

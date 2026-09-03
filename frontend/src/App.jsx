@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ErrorBoundary from './components/ErrorBoundary'
+import PatientAdmin from './components/PatientAdmin'
 import { Api, ApiError } from './lib/api'
 import DosageConfirm from './components/DosageConfirm'
 import GlanceView from './components/GlanceView'
@@ -268,6 +269,25 @@ function Workspace({ session, onSignOut }) {
           </Button>
         </div>
       </header>
+
+      {isClinical && (
+        <PatientAdmin
+          session={session}
+          onEnrolled={() => {
+            // A newly registered patient has to appear in the roster without a
+            // page reload, or the staff member reasonably concludes it failed.
+            Api.patients()
+              .then(setPatients)
+              .catch((err) => setError(err.message))
+          }}
+          onFound={(patient) => {
+            setPatients((rows) =>
+              rows.some((row) => row.id === patient.id) ? rows : [...rows, patient]
+            )
+            setSelected(patient.id)
+          }}
+        />
+      )}
 
       {patients.length > 1 && (
         <nav className="mt-3 flex flex-wrap gap-1">

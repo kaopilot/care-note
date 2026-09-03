@@ -10,7 +10,7 @@ reviewer than an accurate one.
 
 ```bash
 pytest tests/ -q          # 543 backend functions
-cd frontend && npm test   # 69 component
+cd frontend && npm test   # 78 component
 ```
 
 ---

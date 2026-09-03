@@ -137,6 +137,11 @@ export const Api = {
   logout: () => api('/auth/logout', { method: 'POST' }),
 
   patients: () => api('/patients'),
+  // One patient by id. The 404 this returns for another clinic's patient is the
+  // visible half of D-085 — same answer as a nonexistent id, so a clinician here
+  // is not told a patient there exists.
+  patient: (patientId) => api(`/patients/${patientId}`),
+  enrolPatient: (payload) => api('/patients', body(payload)),
   entries: (patientId) => api(`/patients/${patientId}/entries`),
   glance: (patientId) => apiTimed(`/patients/${patientId}/glance`),
   myCare: (patientId) => apiTimed(`/patients/${patientId}/my-care`),
