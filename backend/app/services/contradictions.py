@@ -67,6 +67,7 @@ from sqlalchemy.orm import Session
 from app.core.enums import AI_SCRIBED_TYPES, EntryType, RiskLevel
 from app.core.provenance import entry_pointer
 from app.models import Entry
+from app.services import dosage
 from app.services.features import MEDICATIONS, NEGATION_RE
 
 # Severity of each contradiction class. Allergy conflicts are `critical` and are
@@ -207,7 +208,13 @@ _DOSE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml|units?|iu)\b", re.I)
 # entries that agree, which is the failure mode that trains people to ignore it.
 # Volume and activity units are not inter-convertible with mass and are compared
 # only against their own kind.
-_MASS_TO_MG: dict[str, float] = {"mg": 1.0, "g": 1000.0, "mcg": 0.001}
+_MASS_TO_MG: dict[str, float] = {
+    "mg": 1.0,
+    "g": 1000.0,
+    "gram": 1000.0,
+    "mcg": 0.001,
+    "microgram": 0.001,
+}
 
 
 def _normalise_dose(dose: tuple[str, str] | None) -> tuple[float, str] | None:
@@ -303,7 +310,8 @@ class _Claim:
 def _extract_claims(text: str) -> list[_Claim]:
     claims: list[_Claim] = []
     for order, sentence in enumerate(_sentences(text)):
-        for drug, position in _drug_mentions(sentence):
+        for mention in dosage.drug_doses(sentence):
+            drug, position = mention.drug, mention.start
             if _negated(sentence, position):
                 # A denial is not nothing. If the sentence is about allergy at
                 # all, record it as a claim of its own kind so it can be
@@ -316,10 +324,11 @@ def _extract_claims(text: str) -> list[_Claim]:
                     )
                 continue
             drug_class = MEDICATIONS[drug]
-            dose_match = _DOSE.search(sentence)
-            dose = (
-                (dose_match.group(1), dose_match.group(2).lower()) if dose_match else None
-            )
+            # The dose bound to THIS drug, not the first dose in the sentence.
+            # "Continue metformin 1g BD, amlodipine 5mg OD" used to give both
+            # drugs 1g and then report a dose disagreement against a later note
+            # that agreed. See dosage.drug_doses and DECISIONS.md D-101.
+            dose = mention.dose
 
             if _matches_any(sentence, _ALLERGY_CUES):
                 kind = "allergy"
