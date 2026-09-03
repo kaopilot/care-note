@@ -37,6 +37,27 @@ record:
 ./run_tests.sh tests/test_survival_scenarios.py -q      # expect: 5 passed
 ```
 
+**Tokens for the curl segments.** Segments 2 and 3 talk to the API directly,
+because the controls they demonstrate are server-side and a browser cannot prove
+that — enrolment has no screen, and clinic isolation shown in a UI that never
+offers the button proves only that the button was not built. Export these in terminal 3 before recording — a login round-trip on camera
+is dead air:
+
+```bash
+tok() { curl -s -X POST localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$1\",\"password\":\"carenote-demo\"}" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])'; }
+
+export STAFF_A_TOKEN=$(tok staff_a)
+export CLINICIAN_A_TOKEN=$(tok clinician_a)
+echo "${STAFF_A_TOKEN:0:12}… ${CLINICIAN_A_TOKEN:0:12}…"    # both non-empty
+```
+
+Tokens expire after 60 minutes with no refresh (D-016), which is a real
+constraint on a long recording session: re-run the two exports if a curl starts
+returning 401 mid-take.
+
 Two browser windows side by side at `localhost:5173` — **left `clinician_a`,
 right `staff_a`**, password `carenote-demo`.
 
@@ -69,15 +90,33 @@ Do not read the table aloud. Let it scroll and move on.
 
 ## 2 — She has no email (scenarios 1, 5) · ~75s
 
-Right window, as `staff_a`: **Add patient** → name only, identifier type
-**phone**, `0198887777` → **Issue login**.
+**Enrolment is an API, not a screen** — there is no "add patient" form, and
+saying so on camera is better than fumbling for one. In the terminal, as
+`staff_a`:
+
+```bash
+curl -s -X POST localhost:8000/patients \
+  -H "Authorization: Bearer $STAFF_A_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Siti Rahman","identifier_type":"phone",
+       "identifier":"0198887777","create_login":true}'
+```
+
+It returns her `patient_id`, `username: 0198887777`, and a `one_time_passcode`
+shown exactly once.
 
 > "She exists for the clinic as a phone number in a WhatsApp thread. Phone is a
 > first-class identifier, not a workaround — and `dob` and `mrn` had to become
 > nullable, because those `NOT NULL` columns were a second, quieter way the
-> schema decided she was not a patient."
+> schema decided she was not a patient. There is no enrolment screen; front-desk
+> UI was scope we cut, and the identity model is the part scenario 1 asks
+> about."
 
-Log in as her in a private window to show the passcode works.
+Now the payoff, and it is in the UI: reload the right window as `staff_a` and
+**Siti Rahman is in the patient list**. Then log in as her in a private window,
+username `0198887777`, password the passcode — the patient view opens.
+
+Run the same curl a second time to show it returns `409 That identifier is
+already registered` rather than a second account on one phone number.
 
 Then, terminal:
 
@@ -96,11 +135,23 @@ Then, terminal:
 
 ## 3 — Assume that line has a bug (scenario 2) · ~60s · **shows a failure**
 
-Left window as `clinician_a`, paste Clinic B's patient id into the URL → 404.
+**Do this in the terminal, not the browser.** The app has no URL routing —
+patient selection is client state — and a UI that never offers the button is not
+evidence of anything. The claim is that the *server* refuses, so ask the server:
 
-> "Isolation is enforced in one place: `AccessScope.query`. Routes never get a
-> user, they get a scope that has already narrowed to their clinic, so
-> forgetting the check is not a mistake you can make."
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/patients/patient-b1/glance \
+  -H "Authorization: Bearer $CLINICIAN_A_TOKEN"     # 404
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/patients/patient-a1/glance \
+  -H "Authorization: Bearer $CLINICIAN_A_TOKEN"     # 200
+```
+
+> "404, not 403 — a clinician in Clinic A is not told that patient exists.
+> Isolation is enforced in one place: `AccessScope.query`. Routes never get a
+> user, they get a scope already narrowed to their clinic, so forgetting the
+> check is not a mistake you can make. And it has to be shown at the API,
+> because showing it in a UI that never renders the button proves only that we
+> did not build the button."
 
 Terminal:
 

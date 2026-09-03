@@ -682,7 +682,7 @@ an undisclosed gap has reason to wonder what else was not mentioned.
 | Unreadable content | A substantive turn in an unsupported language is flagged rather than silently producing nothing (D-072) |
 | Allergy asserted vs denied | Detected as its own contradiction class at HIGH (D-073) |
 | Patient reach | `unread` / `read` / `corrected`; a correction the patient has not seen is surfaced to both sides (D-074) |
-| Patient enrolment | Staff can register a patient and issue a login; a phone number is a first-class identifier (D-075) |
+| Patient enrolment | Staff can register a patient and issue a login; a phone number is a first-class identifier (D-075). **API only — there is no enrolment screen**: `POST /patients`, then the returned one-time passcode. The new patient does appear in the clinician's patient list in the UI |
 
 ### Phase 9 — changes made after the clinic-scenario review
 
@@ -833,6 +833,14 @@ README exists not to do.
   (D-102). The full original is restorable, but until someone restores it there
   is no live text to put side by side — an honest gap rather than a fabricated
   comparison.
+- **Two things the API does that the UI does not.** There is no enrolment form
+  (`POST /patients` only) and no URL routing at all — patient selection is React
+  state, so there is no address to paste another clinic's patient id into. Both
+  are honest scope cuts, but they mean the two controls a reviewer most wants to
+  see refused have to be demonstrated with `curl`, which is where
+  `docs/DEMO_SCRIPT.md` now shows them. That is the stronger demonstration
+  anyway: a UI that never renders the button proves only that the button was not
+  built.
 - **Module joins are less examined than modules.** Three of the four defects in
   the final audit pass sat between two pieces of correct code — two constants
   sharing a name, two extractors sharing a regex but not a rule, and a lifecycle
