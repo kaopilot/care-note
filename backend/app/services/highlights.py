@@ -401,7 +401,30 @@ def decode_tags(raw: str | None) -> list[str]:
 
 
 def is_stale(highlight: Highlight, entry: Entry) -> bool:
-    """True when the entry has been edited since this highlight was anchored."""
+    """True when the live entry text is no longer what this highlight anchored to.
+
+    Two ways that happens, and for a long time this function only knew about one.
+
+    **An edit.** A new version, so `version_number` moves and the comparison
+    below catches it. This is the case scenario 16 describes and the one the
+    side-by-side UI was built for.
+
+    **Decay compression.** `decay.compress` replaces `Entry.content` with an
+    extractive summary and deliberately does *not* create a version — archival
+    is not an authorship event and putting it in the clinical revision history
+    would be worse. But `version_number` was the only thing staleness was
+    reading, so a compressed entry reported `stale=False` while its content had
+    been wholesale replaced: a highlight anchored to "mild ankle swelling"
+    resolved to `'ing in the evenings'` at the same offsets, with no warning and
+    no side-by-side, which is exactly the "silently point at different text"
+    failure the mechanism exists to prevent.
+
+    A cold entry's content is a summary, so it matches no version snapshot by
+    construction — every highlight on it is stale, whatever its version number
+    says. See DECISIONS.md D-102.
+    """
+    if str(entry.decay_state) == str(DecayState.COLD):
+        return True
     return highlight.source_version_number != entry.version_number
 
 
@@ -421,6 +444,12 @@ def current_text(entry: Entry, highlight: Highlight) -> str | None:
     content = entry.content or ""
     start, end = highlight.span_start, highlight.span_end
     if start is None or end is None:
+        return None
+    if str(entry.decay_state) == str(DecayState.COLD):
+        # The offsets index the original, and `content` is now a summary built
+        # from a different subset of it. Slicing anyway returns a fragment that
+        # reads like a quote and is not one. None makes the UI say the span is
+        # not in the shortened copy, and the full original can be restored.
         return None
     if start < 0 or end > len(content) or start >= end:
         return None

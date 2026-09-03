@@ -163,10 +163,21 @@ function Workspace({ session, onSignOut }) {
     []
   )
 
-  /** Land on the words, not just the note. */
+  /**
+   * Land on the words, not just the note.
+   *
+   * Except when the highlight is stale. Then the offsets describe text that is
+   * no longer there — an edit moved it, or decay replaced the note with a
+   * shortened copy — and emphasising them anyway paints a box around whatever
+   * happens to sit at those coordinates now, which in practice is a fragment
+   * starting mid-word. The card already shows both versions side by side; the
+   * timeline scrolls to the entry and highlights nothing, because pointing
+   * confidently at the wrong words is worse than pointing at the note.
+   * See DECISIONS.md D-102.
+   */
   const jumpTo = useCallback((entryId, highlight) => {
     setEmphasis(
-      highlight
+      highlight && !highlight.stale
         ? { entryId, start: highlight.span_start, end: highlight.span_end }
         : { entryId, start: 0, end: 0 }
     )
