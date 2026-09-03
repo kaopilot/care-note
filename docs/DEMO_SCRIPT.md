@@ -1,6 +1,6 @@
 # Demo Script — round two
 
-**Nine segments, ~9 minutes.** The brief asks to demonstrate as many of
+**Nine segments, ~10 minutes.** The brief asks to demonstrate as many of
 scenarios 1–16 as possible, so this script is organised by scenario, not by
 product tour. Every claim below is visible on screen at the moment it is said;
 if a number differs from what you see, read what you see.
@@ -57,6 +57,11 @@ that, so confirm it is there before you start.
 > isolation and log hygiene were both SURVIVES until we measured them properly.
 > This file fails if its verdicts drift from the published table, so the
 > document and the tests cannot disagree."
+
+> "One more thing before we start. We ran a final pass after this table was
+> written and found four more defects, all of them live while every test passed.
+> Two were misfiring on the two surfaces a patient can actually see. They are in
+> segments 8 and 9, shown where the build was wrong rather than in a footnote."
 
 Do not read the table aloud. Let it scroll and move on.
 
@@ -212,7 +217,7 @@ Point to the Malay entry (`Kebas sikit waktu pagi`).
 
 ---
 
-## 8 — Provenance, and two people typing (scenarios 16, 10) · ~75s
+## 8 — Provenance, and two people typing (scenarios 16, 10) · ~90s
 
 Click a highlight → jumps to the exact span in the source entry.
 
@@ -223,6 +228,38 @@ Now edit that source note in the right window. Reload the left.
 > because it looks fine. Highlights anchor to a version number, so it resolves
 > against the text it was made from and shows both side by side."
 
+**Then keep going, because this is where our final audit found a defect.** The
+seed already ran the decay policy, so `entry-a1-hist-2026` is archived and one
+highlight points into it — no command needed. Show the policy if you like, but
+say what it is:
+
+```bash
+python scripts/run_decay.py --clinic clinic-a      # preview: 0 changing, 12 unchanged
+```
+
+Scroll the Glance View to that highlight. It carries the stale marker and says
+*"the source note has been shortened for archiving"* — not a version change,
+because there isn't one. Click it: the timeline scrolls to the note and draws no
+box.
+
+> "Our answer to scenario 16 was version numbers, and it was right for edits.
+> Decay compresses an old note to a summary — and archival is deliberately not
+> an authorship event, so it creates no version. Staleness was a version-number
+> comparison, so a compressed note reported *not stale* while the highlight's
+> offsets pointed into a summary they no longer describe. Note the wording: an
+> archived note gets its own sentence, because the edit one renders as 'v1 to
+> v1' here, which reads like a bug. That is the silently-wrong
+> case, reached by a route the mechanism never watched. Both routes are closed
+> now. Watch what the timeline does here: it scrolls to the note and highlights
+> nothing, because pointing confidently at the wrong words is worse than
+> pointing at the note. That half was wrong for edits too."
+
+Click **Restore full note**.
+
+> "Stale is not lost. The original is archived byte for byte, the highlighted
+> words still resolve against their version snapshot, and restoring the note
+> makes its highlights current again."
+
 Both windows, same note, same section, type in both, save left then right.
 
 > "Scenario 10. The second save is rejected with a 409, not silently merged and
@@ -232,9 +269,22 @@ Both windows, same note, same section, type in both, save left then right.
 
 ---
 
-## 9 — What reaches the patient (scenarios 12, 11) · ~60s
+## 9 — What reaches the patient (scenarios 12, 11) · ~90s
 
-Attempt a patient-facing note containing `metformin 5000mg`.
+First, a note that must go through untouched: `Continue metformin 1g BD,
+amlodipine 5mg OD, atorvastatin 20mg ON.` It saves without a prompt, and the
+Glance View shows no contradiction.
+
+> "That ordinary line used to do two wrong things at once. The contradiction
+> detector gave the first dose in the sentence to every drug in it, so it
+> reported amlodipine at one gram — a dose that does not exist for that drug —
+> as a high-severity disagreement against a later note that agreed. And the
+> dosage gate's window ran past the next drug name, so 'metformin and
+> amlodipine 5mg' read as metformin 5mg and blocked the write. A safety check
+> that is confidently wrong about an easy case teaches people the check means
+> nothing, which disarms it for the one that matters."
+
+Now attempt a patient-facing note containing `metformin 5000mg`.
 
 > "Patient-facing content is a higher severity class — you cannot audit
 > something already on someone's phone. An implausible dose gates the write, and
@@ -246,6 +296,18 @@ Patient tab → correction banner.
 > "Scenario 11 asks why the link never arrives. Ours never sends — there is no
 > email, SMS or push, and `dispatched` is deliberately not modelled rather than
 > faked. We report reach honestly: unread, read, corrected."
+
+Still in the patient tab, add a patient note, then edit it. **Nothing happens** —
+no banner on her page, and no row appears on the clinician's delivery panel.
+(The unread count may fall, because opening the portal marks the *clinician's*
+instructions read. That is the panel working.)
+
+> "This banner is the loudest thing we say to a patient, and it means the clinic
+> changed something you already acted on — possibly a dose. Until our last audit
+> it also fired when she edited her own note, because two modules had a constant
+> with the same name and different contents. She would have been told to stop
+> following her own words. The one reader in this system with no way to check a
+> warning against anything was the one getting a false one."
 
 ---
 
@@ -261,6 +323,14 @@ Patient tab → correction banner.
 > "Nine survive, six partial, one does not. Two moved backwards because we
 > measured our own claims instead of restating them. The full table, with the
 > test behind every row, is in `SCENARIO_COVERAGE.md`."
+
+> "And scenario 16 kept its verdict but not the reason it deserved it — decay
+> reached the same content by a route we had never checked. Three of the four
+> defects in that final pass sat in a seam between two modules that were each
+> correct alone. Every module in this repo argues for its own behaviour at
+> length; none says what it assumes about the one beside it. That is where we
+> would look next, and it is written down in D-103 rather than left for someone
+> else to find."
 
 ---
 

@@ -27,7 +27,7 @@ worth reading are [Where redaction happens](#where-redaction-happens),
 **Deliverables:** [`docs/TECHNICAL_BRIEF.md`](docs/TECHNICAL_BRIEF.md)
 (3 pages, PDF alongside it, rebuilt by `scripts/build_brief.sh`) ·
 [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) ·
-[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (528 test functions, 851 cases) ·
+[`ATTRIBUTION.txt`](ATTRIBUTION.txt) · `pytest tests/ -q` (542 test functions, 866 cases) ·
 `cd frontend && npm test` (67 component tests).
 
 ---
@@ -126,7 +126,7 @@ no network access needed — the LLM provider defaults to an offline stub and th
 database is a local SQLite file created by the test run.
 
 ```bash
-./run_tests.sh                    # from anywhere in the repo — 528 test functions
+./run_tests.sh                    # from anywhere in the repo — 542 test functions
 ```
 
 Or, if you prefer to invoke `pytest` yourself, note that it needs **both** the
@@ -143,12 +143,12 @@ pytest tests/ -v                      # ...but run from the repository root
 errors for one setup cause; it resolves both and takes the same arguments pytest
 does (`./run_tests.sh -k rbac`, `./run_tests.sh tests/test_rbac_scope.py -v`).
 
-528 backend test functions — 851 collected cases once parametrisation is
+542 backend test functions — 866 collected cases once parametrisation is
 expanded — plus 67 frontend component tests. All passing, no API key or network
-required. Roughly 50 seconds.
+required. Roughly 60 seconds.
 
 The two numbers differ because 44 functions are parametrised, and the honest one
-to quote is **528**. A single assertion applied to 49 routes is one test, not
+to quote is **542**. A single assertion applied to 49 routes is one test, not
 49, and a suite that reports the larger figure is padding its own scorecard.
 
 To run just the four files the brief names:
@@ -820,6 +820,25 @@ README exists not to do.
 - **Contradiction detection ignores time.** An allergy recorded in 2019 and
   denied today reads identically to the reverse, though the second is far more
   likely to be a genuine correction (D-073).
+- **Dose-to-drug binding is proximity, not grammar.** Each dose is bound to the
+  nearest drug name, never reading past the drug on either side (D-101). That is
+  right for how medication lists are written and it is not parsing: a dose
+  separated from its drug by an intervening clause is missed, and the failure is
+  silence. It replaced two rules that were confidently wrong — one attached the
+  first dose in a sentence to every drug in it, the other read straight through
+  the next drug name — so this is a narrower claim than the code used to make.
+- **A cold entry cannot show a current version beside a highlight.** Compression
+  replaces content with a summary, so highlights on it are marked stale and the
+  UI shows the anchored text and says the span is not in the shortened copy
+  (D-102). The full original is restorable, but until someone restores it there
+  is no live text to put side by side — an honest gap rather than a fabricated
+  comparison.
+- **Module joins are less examined than modules.** Three of the four defects in
+  the final audit pass sat between two pieces of correct code — two constants
+  sharing a name, two extractors sharing a regex but not a rule, and a lifecycle
+  transition bypassing a mechanism watching a different variable (D-103). Every
+  module here documents its own behaviour at length; none documents what it
+  assumes about its neighbour.
 - **Clinic provisioning is still `init_db.py`.** Deliberate — tenant creation is
   an operator path, not an in-app button. But per-clinic configuration is a real
   gap: clinical vocabulary, red-flag terms, decay thresholds and confidence bands
